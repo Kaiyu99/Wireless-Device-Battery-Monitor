@@ -1,24 +1,23 @@
 #pragma once
-// "Request support for a device": a small window where a user picks a device that is not shown, and the
-// app sends its name and a short technical summary to the public request list at krisgfx.com/tools
-// (which opens or updates a GitHub issue). Nothing is sent until the user clicks Send, and the window
-// shows exactly what will be sent first.
+// 「デバイスのサポートをリクエスト」: 表示されないデバイスをユーザーが選ぶ小さなウィンドウ。アプリはその名前と
+// 短い技術情報を krisgfx.com/tools の公開リクエスト一覧に送る（GitHub の issue が作成または更新される）。
+// ユーザーが「送信」を押すまで何も送らず、送る内容はウィンドウに先にそのまま表示する。
 #include <windows.h>
 
 #include <string>
 
 namespace report {
 
-// Opens the window (or brings it to the front if it is already open). With no owner (`--report`), closing
-// the window ends the message loop.
+// ウィンドウを開く（すでに開いていれば前面に出す）。オーナーがない場合（`--report`）は、ウィンドウを
+// 閉じるとメッセージループが終わる。
 void Show(HINSTANCE inst, HWND owner);
 
-// Lets Tab / Enter / Esc work inside the window; call from the message loop before TranslateMessage.
+// ウィンドウ内で Tab / Enter / Esc が効くようにする。メッセージループで TranslateMessage の前に呼ぶこと。
 bool PreTranslate(MSG* msg);
 
-// Extra sections for `--dump` and the full report: HID devices that could not be opened, every USB device
-// (including ones without a HID interface, e.g. audio-only or WinUSB dongles and serial ports) and the
-// Bluetooth devices Windows knows about.
+// `--dump` と完全なレポート用の追加セクション: 開けなかった HID デバイス、すべての USB デバイス
+// （HID インターフェースがないもの、たとえば音声専用や WinUSB のドングル、シリアルポートも含む）、そして
+// Windows が把握している Bluetooth デバイス。
 std::wstring DumpExtras();
 
 }  // namespace report

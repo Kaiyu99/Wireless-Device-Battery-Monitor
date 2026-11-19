@@ -1,5 +1,5 @@
-// Runs every driver in order. Vendor drivers go first and claim the devices they handle; the
-// generic fallbacks then only look at what is left.
+// すべてのドライバーを順番に実行する。メーカー別ドライバーが先に動き、自分が扱うデバイスを確保する。
+// 汎用のフォールバックは、残ったデバイスだけを調べる。
 #include "devices.h"
 
 #include <algorithm>
@@ -12,8 +12,8 @@
 
 namespace {
 
-// HKCU\Software\WirelessBattery\IgnoreDevices (REG_SZ): "VID:PID" pairs in hex, separated by spaces,
-// commas or semicolons (e.g. "28BD:0947, 046D:C547"). No driver ever opens those devices (issue #232).
+// HKCU\Software\WirelessBattery\IgnoreDevices（REG_SZ）: 16 進の "VID:PID" を空白・カンマ・セミコロンで
+// 区切って並べたもの（例: "28BD:0947, 046D:C547"）。ここにあるデバイスはどのドライバーも開かない（issue #232）。
 std::vector<std::pair<USHORT, USHORT>> IgnoredDevices() {
     std::vector<std::pair<USHORT, USHORT>> out;
     wchar_t buf[1024];
@@ -47,17 +47,17 @@ std::vector<DeviceStatus> PollAllDevices() {
                         }),
                         ctx.colls.end());
     PollGlorious(ctx);
-    PollAula(ctx);       // before Kysona, which shares the 3554 vendor id and would probe it first
+    PollAula(ctx);       // Kysona より前: 3554 のベンダー ID を共有しており、Kysona が先に問い合わせてしまうため
     PollDareu(ctx);
     PollDarmoshark(ctx);
-    PollAtkSerial(ctx);  // before Kysona, which shares the ATK vendor id
+    PollAtkSerial(ctx);  // Kysona より前: ATK のベンダー ID を共有しているため
     PollAtkKeyboard(ctx);
-    PollPulsar(ctx);     // before Kysona, which also scans the 3710 vendor id
-    PollAtkBitmouse(ctx);  // before Kysona, which would probe the NK dongle with the wrong protocol
+    PollPulsar(ctx);     // Kysona より前: Kysona も 3710 のベンダー ID を走査するため
+    PollAtkBitmouse(ctx);  // Kysona より前: Kysona が NK ドングルに間違ったプロトコルで問い合わせてしまうため
     PollKysona(ctx);
     PollKeychron(ctx);
     PollCherry(ctx);
-    PollArbiter(ctx);    // before Lamzu, which shares the 373E vendor id
+    PollArbiter(ctx);    // Lamzu より前: 373E のベンダー ID を共有しているため
     PollLamzu(ctx);
     PollEndgame(ctx);
     PollEndgameWe(ctx);
@@ -81,16 +81,16 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollAreson(ctx);
     PollMchoseG3(ctx);
     PollMsi(ctx);
-    PollMachenike(ctx);  // before Ajazz in PollMiscMice, which shares the L7's 248A vendor id
-    PollNiceboy(ctx);    // exact 248A:FA02 match, also before the Ajazz / Delux pollers
+    PollMachenike(ctx);  // PollMiscMice の Ajazz より前: L7 の 248A ベンダー ID を共有しているため
+    PollNiceboy(ctx);    // 248A:FA02 の完全一致。これも Ajazz / Delux のポーリングより前
     PollMchoseModern(ctx);
     PollMchoseHeadset(ctx);
     PollMiscMice(ctx);
     PollFantech(ctx);
-    PollRazerHeadsets(ctx);  // before the generic Razer driver, which shares the vendor id
-    PollBarracudaPro(ctx);   // before the generic Razer driver as well
+    PollRazerHeadsets(ctx);  // 汎用 Razer ドライバーより前: ベンダー ID を共有しているため
+    PollBarracudaPro(ctx);   // これも汎用 Razer ドライバーより前
     PollHyperX(ctx);
-    PollLogitechG435(ctx);  // before the HID++ driver, which shares the vendor id
+    PollLogitechG435(ctx);  // HID++ ドライバーより前: ベンダー ID を共有しているため
     PollAstro(ctx);
     PollLogitech(ctx);
     PollRazer(ctx);
@@ -108,15 +108,15 @@ std::vector<DeviceStatus> PollAllDevices() {
     PollFlydigi(ctx);
     PollGameSirCyclone(ctx);
     Poll8BitDo(ctx);
-    PollBeitong(ctx);  // before the XInput fallback, which only sees the receiver as wired
-    PollAirPods(ctx);  // before the Bluetooth fallback, which has no level for AirPods
+    PollBeitong(ctx);  // XInput のフォールバックより前: XInput はレシーバーを有線としか認識しないため
+    PollAirPods(ctx);  // Bluetooth のフォールバックより前: そちらでは AirPods の残量が取れないため
     PollPhoneLink(ctx);
-    PollGalaxyBuds(ctx);  // before the Bluetooth fallback, which skips devices already listed by name
+    PollGalaxyBuds(ctx);  // Bluetooth のフォールバックより前: そちらは名前ですでに一覧にあるデバイスを飛ばすため
     PollMoondrop(ctx);
     PollAlienware(ctx);
-    PollMaono(ctx);  // MAONO PD200W receiver (352F:040E), experimental battery query
+    PollMaono(ctx);  // MAONO PD200W のレシーバー（352F:040E）。バッテリー問い合わせは試験的
     PollHeadsetControl(ctx);
-    PollBluetooth(ctx);   // before the generic HID check: Windows' own level wins for the same device
+    PollBluetooth(ctx);   // 汎用 HID チェックより前: 同じデバイスなら Windows 自身の残量を優先する
     PollGenericHid(ctx);
     PollXInput(ctx);
     return ctx.out;
@@ -130,7 +130,7 @@ std::wstring DumpHidCollections() {
                  c.featLen());
         out += line + HidProduct(c) + L"\n";
     }
-    out += report::DumpExtras();  // unopenable HID collections, non-HID USB devices, Bluetooth devices
+    out += report::DumpExtras();  // 開けなかった HID コレクション、HID 以外の USB デバイス、Bluetooth デバイス
     out += DumpXentaFrames();
     return out;
 }

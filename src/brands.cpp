@@ -4,25 +4,25 @@
 
 namespace {
 
-// `dark`: the official colour; brightened (same hue) only for Xbox, PlayStation and Samsung, whose
-// brand blues and greens are too dark on a dark taskbar. `light`: a deeper shade with at least 3:1
-// contrast on the light taskbar (#F3F3F3); yellow and silver need the most darkening.
+// `dark`: 公式のブランドカラー。Xbox・PlayStation・Samsung だけは、青や緑が暗いタスクバーでは
+// 暗すぎるため、同じ色相のまま明るくしている。`light`: 明るいタスクバー（#F3F3F3）に対して
+// 3:1 以上のコントラストがある濃い色。黄色と銀色は最も濃くする必要がある。
 const BrandStyle kBrands[] = {
     { Accent::None,         L"",             { 255, 255, 255 }, {   0,   0,   0 } },
     { Accent::Razer,        L"Razer",        {  68, 214,  44 }, {  22, 140,  20 } },  // #44D62C
     { Accent::Logitech,     L"Logitech",     {   0, 184, 252 }, {   0, 120, 180 } },  // Logitech G #00B8FC
     { Accent::SteelSeries,  L"SteelSeries",  { 255,  82,   0 }, { 204,  65,   0 } },  // #FF5200
-    { Accent::Corsair,      L"Corsair",      { 245, 228,  26 }, { 150, 122,   0 } },  // yellow #F5E41A
+    { Accent::Corsair,      L"Corsair",      { 245, 228,  26 }, { 150, 122,   0 } },  // 黄色 #F5E41A
     { Accent::HyperX,       L"HyperX",       { 232,  35,  63 }, { 200,  16,  46 } },  // #E31837
-    { Accent::Rog,          L"ROG",          { 255,  46,  77 }, { 208,   0,  42 } },  // ROG red #FF0029
+    { Accent::Rog,          L"ROG",          { 255,  46,  77 }, { 208,   0,  42 } },  // ROG の赤 #FF0029
     { Accent::Zowie,        L"ZOWIE",        { 240,  60,  50 }, { 192,  32,  26 } },  // #E2231A
     { Accent::PlayStation,  L"PlayStation",  {  31, 139, 255 }, {   0,  98, 196 } },  // #0070D1
     { Accent::Xbox,         L"Xbox",         {  34, 168,  34 }, {  16, 124,  16 } },  // #107C10
     { Accent::Galaxy,       L"Samsung",      {  91, 123, 255 }, {  20,  40, 160 } },  // #1428A0
-    { Accent::Apple,        L"Apple",        { 199, 199, 204 }, { 110, 110, 115 } },  // silver / space grey
+    { Accent::Apple,        L"Apple",        { 199, 199, 204 }, { 110, 110, 115 } },  // シルバー / スペースグレイ
     { Accent::Jabra,        L"Jabra",        { 255, 200,   0 }, { 140, 106,   0 } },  // #FFC800
     { Accent::Jbl,          L"JBL",          { 255,  61,   0 }, { 204,  52,   0 } },  // #FF3D00
-    { Accent::CoolerMaster, L"Cooler Master",{ 157, 107, 255 }, { 106,  43, 217 } },  // purple
+    { Accent::CoolerMaster, L"Cooler Master",{ 157, 107, 255 }, { 106,  43, 217 } },  // 紫
     { Accent::Steam,        L"Steam",        {  26, 159, 255 }, {  11, 111, 191 } },  // #1A9FFF
 };
 
@@ -33,7 +33,7 @@ std::wstring Lower(std::wstring s) {
 
 bool StartsWith(const std::wstring& s, const wchar_t* p) { return s.rfind(p, 0) == 0; }
 
-// `w` as a whole word: "rog" matches "ROG Harpe" and "ASUS ROG Delta", not "Progress".
+// `w` は単語単位で一致: "rog" は "ROG Harpe" や "ASUS ROG Delta" に一致し、"Progress" には一致しない。
 bool HasWord(const std::wstring& n, const std::wstring& w) {
     for (size_t at = n.find(w); at != std::wstring::npos; at = n.find(w, at + 1)) {
         bool startOk = at == 0 || !iswalnum(n[at - 1]);
@@ -63,19 +63,19 @@ const KeyRule kKeys[] = {
     { L"steam:", Accent::Steam },
 };
 
-// Vendor ids that only one of these brands uses. Shared ones are left to the name check:
-// 03F0 (HP, also HyperX), 0B05 (ASUS, also ROG), 045E (Microsoft: Xbox pads but also Surface mice).
+// これらのブランドのうち 1 社だけが使うベンダー ID。共有されている ID は名前での判定に任せる:
+// 03F0（HP、HyperX も使用）、0B05（ASUS、ROG も使用）、045E（Microsoft: Xbox パッドのほか Surface マウスも）。
 struct VidRule { unsigned short vid; Accent a; };
 const VidRule kVids[] = {
-    { 0x1532, Accent::Razer }, { 0x068E, Accent::Razer },  // 068E: Razer keyboards over Bluetooth LE
+    { 0x1532, Accent::Razer }, { 0x068E, Accent::Razer },  // 068E: Bluetooth LE 接続の Razer キーボード
     { 0x046D, Accent::Logitech },
     { 0x1038, Accent::SteelSeries },
     { 0x1B1C, Accent::Corsair },
-    { 0x0951, Accent::HyperX },     // Kingston-era HyperX
+    { 0x0951, Accent::HyperX },     // Kingston 時代の HyperX
     { 0x04A5, Accent::Zowie },      // BenQ
     { 0x054C, Accent::PlayStation },
     { 0x04E8, Accent::Galaxy },
-    { 0x05AC, Accent::Apple }, { 0x004C, Accent::Apple },  // USB / Bluetooth SIG company id
+    { 0x05AC, Accent::Apple }, { 0x004C, Accent::Apple },  // USB / Bluetooth SIG のカンパニー ID
     { 0x0B0E, Accent::Jabra },
     { 0x0ECB, Accent::Jbl },
     { 0x2516, Accent::CoolerMaster },
@@ -87,7 +87,7 @@ struct NameRule { const wchar_t* text; How how; Accent a; };
 const NameRule kNames[] = {
     { L"razer", How::Contains, Accent::Razer },
     { L"logitech", How::Contains, Accent::Logitech }, { L"logi ", How::Prefix, Accent::Logitech },
-    // Bluetooth names often leave the brand out: "MX Master 3S", "MX Keys S", "LIFT", "POP Mouse", "Pebble M350".
+    // Bluetooth の名前にはブランド名が入っていないことが多い: "MX Master 3S"、"MX Keys S"、"LIFT"、"POP Mouse"、"Pebble M350"。
     { L"mx ", How::Prefix, Accent::Logitech }, { L"lift", How::Prefix, Accent::Logitech },
     { L"pop mouse", How::Prefix, Accent::Logitech }, { L"pop keys", How::Prefix, Accent::Logitech },
     { L"pebble", How::Prefix, Accent::Logitech }, { L"ergo k", How::Prefix, Accent::Logitech },
@@ -100,7 +100,7 @@ const NameRule kNames[] = {
     { L"zowie", How::Contains, Accent::Zowie },
     { L"dualsense", How::Contains, Accent::PlayStation }, { L"dualshock", How::Contains, Accent::PlayStation },
     { L"playstation", How::Contains, Accent::PlayStation }, { L"inzone", How::Word, Accent::PlayStation },
-    { L"wireless controller", How::Exact, Accent::PlayStation },  // DualSense / DualShock 4 Bluetooth name
+    { L"wireless controller", How::Exact, Accent::PlayStation },  // DualSense / DualShock 4 の Bluetooth 名
     { L"xbox", How::Word, Accent::Xbox },
     { L"galaxy ", How::Prefix, Accent::Galaxy }, { L"samsung", How::Word, Accent::Galaxy },
     { L"airpods", How::Contains, Accent::Apple }, { L"magic mouse", How::Prefix, Accent::Apple },
@@ -122,13 +122,13 @@ bool Matches(const std::wstring& n, const NameRule& r) {
     return false;
 }
 
-// Logitech names that are just a model number: "K380", "M720 Triathlon", "G915", "G502 X".
+// 型番だけの Logitech の名前: "K380"、"M720 Triathlon"、"G915"、"G502 X"。
 bool LogitechModel(const std::wstring& n) {
     return n.size() >= 4 && (n[0] == L'g' || n[0] == L'k' || n[0] == L'm') && iswdigit(n[1]) && iswdigit(n[2]) &&
            iswdigit(n[3]) && (n.size() == 4 || !iswalnum(n[4]));
 }
 
-// Sony headphones (WH-1000XM5, WF-1000XM4) share PlayStation's vendor id but are not PlayStation gear.
+// Sony のヘッドホン（WH-1000XM5、WF-1000XM4）は PlayStation とベンダー ID が同じだが、PlayStation 製品ではない。
 bool SonyAudio(const std::wstring& n) { return StartsWith(n, L"wh-") || StartsWith(n, L"wf-") || HasWord(n, L"linkbuds"); }
 
 }  // namespace

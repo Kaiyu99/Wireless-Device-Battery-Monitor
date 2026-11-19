@@ -1,4 +1,4 @@
-// UI translations from plain text files. See i18n.h.
+// テキストファイルによる UI の翻訳。詳しくは i18n.h を参照。
 #include "i18n.h"
 
 #include <windows.h>
@@ -14,18 +14,18 @@ namespace {
 
 const wchar_t kSettingsKey[] = L"Software\\WirelessBattery";
 
-// One language: its built-in text and/or a user's file (whose phrases win), parsed only when chosen.
+// 1 つの言語: 組み込みのテキストとユーザーのファイル（どちらか片方でもよく、ユーザーの訳が優先）。選ばれたときだけ解析する。
 struct Source {
     std::wstring code, name;
     bool rtl = false;
-    std::vector<std::string> texts;  // UTF-8 file contents: built-in first, then user files
+    std::vector<std::string> texts;  // UTF-8 のファイル内容。組み込みが先、その後にユーザーのファイル
 };
 
-std::map<std::wstring, Source> g_sources;           // by lower-case code
-std::unordered_map<std::wstring, std::wstring> g_phrases;  // English -> translation, for the active language
-std::wstring g_choice;                               // saved choice, "" = automatic
+std::map<std::wstring, Source> g_sources;           // 小文字の言語コードがキー
+std::unordered_map<std::wstring, std::wstring> g_phrases;  // 英語 -> 訳文（現在の言語の分）
+std::wstring g_choice;                               // 保存された選択。"" = 自動
 bool g_rtl = false;
-std::string g_template;                              // lang/_template.txt, every English phrase
+std::string g_template;                              // lang/_template.txt。英語のフレーズすべて
 
 std::wstring Lower(std::wstring s) {
     for (auto& c : s) c = (wchar_t)towlower(c);
@@ -41,12 +41,12 @@ std::wstring Wide(const std::string& s) {
 
 std::wstring Trim(const std::wstring& s) {
     size_t a = 0, b = s.size();
-    while (a < b && (iswspace(s[a]) || s[a] == 0xFEFF)) a++;  // also a byte-order mark
+    while (a < b && (iswspace(s[a]) || s[a] == 0xFEFF)) a++;  // バイトオーダーマーク（BOM）も
     while (b > a && iswspace(s[b - 1])) b--;
     return s.substr(a, b - a);
 }
 
-// "\n" -> line break, "\\" -> backslash.
+// "\n" -> 改行、"\\" -> バックスラッシュ。
 std::wstring Unescape(const std::wstring& s) {
     std::wstring out;
     for (size_t i = 0; i < s.size(); i++) {
@@ -60,7 +60,7 @@ std::wstring Unescape(const std::wstring& s) {
     return out;
 }
 
-// Calls fn(key, value) for every "key = value" line; metadata keys start with '@'.
+// "key = value" の行ごとに fn(key, value) を呼ぶ。メタデータのキーは '@' で始まる。
 template <class Fn>
 void ForEachLine(const std::string& utf8, Fn fn) {
     std::wstring text = Wide(utf8);
@@ -77,7 +77,7 @@ void ForEachLine(const std::string& utf8, Fn fn) {
     }
 }
 
-// Reads @code / @name / @rtl from one file and files it under its language.
+// 1 つのファイルから @code / @name / @rtl を読み取り、その言語のところに登録する。
 void AddSource(const std::string& utf8, const std::wstring& fallbackCode) {
     std::wstring code = fallbackCode, name;
     bool rtl = false;
@@ -86,7 +86,7 @@ void AddSource(const std::string& utf8, const std::wstring& fallbackCode) {
         else if (k == L"@name") name = v;
         else if (k == L"@rtl") rtl = v == L"1" || Lower(v) == L"yes" || Lower(v) == L"true";
     });
-    if (code.empty() || Lower(code) == L"en") return;  // English is the source text itself
+    if (code.empty() || Lower(code) == L"en") return;  // 英語は元の文そのもの
     Source& s = g_sources[Lower(code)];
     if (s.code.empty()) s.code = code;
     if (!name.empty()) s.name = name;
@@ -94,8 +94,8 @@ void AddSource(const std::string& utf8, const std::wstring& fallbackCode) {
     s.texts.push_back(utf8);
 }
 
-// The built-in languages: build.bat / the Makefile join lang\*.txt into one resource, each file
-// introduced by a line "@file <name>".
+// 組み込みの言語: build.bat / Makefile が lang\*.txt を 1 つのリソースにまとめる。各ファイルの前には
+// "@file <name>" という行が入る。
 void LoadBuiltIn() {
     HRSRC r = FindResourceW(nullptr, L"LANGS", MAKEINTRESOURCEW(10));  // RT_RCDATA
     HGLOBAL h = r ? LoadResource(nullptr, r) : nullptr;
@@ -129,7 +129,7 @@ void LoadFolder(const std::wstring& dir) {
     if (f == INVALID_HANDLE_VALUE) return;
     do {
         std::wstring file = fd.cFileName;
-        if (file.empty() || file[0] == L'_' || fd.nFileSizeLow > 512 * 1024) continue;  // the template, or not a phrase list
+        if (file.empty() || file[0] == L'_' || fd.nFileSizeLow > 512 * 1024) continue;  // テンプレート、またはフレーズ一覧ではないもの
         HANDLE h = CreateFileW((dir + L"\\" + file).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
         if (h == INVALID_HANDLE_VALUE) continue;
         std::string data(fd.nFileSizeLow, '\0');
@@ -150,7 +150,7 @@ std::wstring ExeFolder() {
     return slash == std::wstring::npos ? L"" : p.substr(0, slash);
 }
 
-// The language to use for the automatic choice: the first Windows display language there is a file for.
+// 自動選択で使う言語: Windows の表示言語のうち、ファイルがある最初のもの。
 std::wstring AutoCode() {
     ULONG count = 0, size = 0;
     if (!GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &count, nullptr, &size) || !size) return L"";
@@ -158,7 +158,7 @@ std::wstring AutoCode() {
     if (!GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &count, buf.data(), &size)) return L"";
     for (const wchar_t* p = buf.c_str(); *p; p += wcslen(p) + 1) {
         std::wstring tag = Lower(p);  // "pt-br", "zh-tw", "de-de", "zh-hant-tw"
-        if (tag.rfind(L"zh-", 0) == 0) {  // Chinese: traditional for Taiwan / Hong Kong / Macau / Hant
+        if (tag.rfind(L"zh-", 0) == 0) {  // 中国語: 台湾 / 香港 / マカオ / Hant は繁体字
             bool trad = tag.find(L"hant") != std::wstring::npos || tag.find(L"-tw") != std::wstring::npos ||
                         tag.find(L"-hk") != std::wstring::npos || tag.find(L"-mo") != std::wstring::npos;
             std::wstring want = trad ? L"zh-tw" : L"zh-cn";
@@ -168,7 +168,7 @@ std::wstring AutoCode() {
         std::wstring base = tag.substr(0, tag.find(L'-'));
         if (base == L"en") return L"";
         if (g_sources.count(base)) return base;
-        for (const auto& [code, s] : g_sources)  // "pt" in Windows, only "pt-BR" here
+        for (const auto& [code, s] : g_sources)  // Windows では "pt"。ここにあるのは "pt-BR" だけ
             if (code.rfind(base + L"-", 0) == 0) return code;
     }
     return L"";
@@ -179,9 +179,9 @@ void Apply() {
     g_rtl = false;
     std::wstring code = g_choice.empty() ? AutoCode() : Lower(g_choice);
     auto it = g_sources.find(code);
-    if (it == g_sources.end()) return;  // English
+    if (it == g_sources.end()) return;  // 英語
     g_rtl = it->second.rtl;
-    for (const std::string& text : it->second.texts)  // built-in first, so a user's file wins
+    for (const std::string& text : it->second.texts)  // 組み込みを先に読むので、ユーザーのファイルが優先される
         ForEachLine(text, [](const std::wstring& k, const std::wstring& v) {
             if (!k.empty() && k[0] != L'@' && !v.empty()) g_phrases[Unescape(k)] = Unescape(v);
         });
@@ -223,7 +223,7 @@ void OpenUserFolder() {
     std::wstring dir = UserFolder();
     if (dir.empty()) return;
     SHCreateDirectoryExW(nullptr, dir.c_str(), nullptr);
-    std::wstring tmpl = dir + L"\\_template.txt";  // refreshed every time, so it always lists the current phrases
+    std::wstring tmpl = dir + L"\\_template.txt";  // 毎回作り直すので、常に最新のフレーズが並ぶ
     HANDLE h = CreateFileW(tmpl.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h != INVALID_HANDLE_VALUE) {
         DWORD w;

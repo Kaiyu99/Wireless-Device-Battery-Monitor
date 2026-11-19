@@ -118,6 +118,13 @@ void PollSonyInzone(PollContext& ctx) {
                 int lvl = LowestBudOut(p);
                 s.connected = lvl >= 0;
                 s.percent = lvl;
+                // 左右それぞれとケースの残量（わからなければ -1）。ツールチップの内訳と、別々に表示するときに使う。
+                auto bud = [](BYTE v) { return v <= 100 ? (int)v : -1; };
+                auto text = [](int v) { return v >= 0 ? std::to_wstring(v) + L"%" : std::wstring(L"in case"); };
+                int left = bud(p[1]), right = bud(p[3]), caseLvl = bud(p[5]);
+                s.buds = { { L"L", left }, { L"R", right }, { L"C", caseLvl, L"case", true } };
+                s.detail = L"L " + text(left) + L", R " + text(right);
+                if (caseLvl >= 0) s.detail += L", case " + std::to_wstring(caseLvl) + L"%";
             } else {
                 bool offline = p[1] == 0xFF;
                 s.connected = !offline;

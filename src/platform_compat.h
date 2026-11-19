@@ -1,10 +1,10 @@
 #pragma once
-// Small portability layer so the shared vendor drivers compile unchanged on both platforms.
-// On Windows this is just <windows.h> plus a couple of UTF-8 helpers. On Linux it supplies the
-// handful of Windows typedefs/builtins the drivers use, implemented with the C++ standard library.
+// 共有のメーカー別ドライバーを、どちらのプラットフォームでも変更なしでコンパイルするための小さな移植レイヤー。
+// Windows では <windows.h> と UTF-8 用のヘルパーが少しあるだけ。Linux では、ドライバーが使う Windows の
+// 型定義や組み込み関数のうち必要な分を、C++ 標準ライブラリで実装して提供する。
 //
-// NOTE FOR REVIEWERS: nothing here changes the Windows code path. It only gives the Linux build
-// the same spellings for a few types and functions.
+// レビュアーへの注意: ここにあるものは Windows のコードの動作を何も変えない。Linux のビルドに、いくつかの型と
+// 関数を同じ名前で提供するだけ。
 
 #include <string>
 
@@ -12,7 +12,7 @@
 
 #include <windows.h>
 
-// Convert between UTF-8 and the platform's wchar_t (UTF-16 on Windows).
+// UTF-8 とプラットフォームの wchar_t（Windows では UTF-16）を相互に変換する。
 inline std::wstring Utf8ToWide(const std::string& s) {
     if (s.empty()) return {};
     int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
@@ -36,7 +36,7 @@ inline void PlatSleep(unsigned long ms) { Sleep(ms); }
 #include <cstdint>
 #include <thread>
 
-// Types used by the shared drivers that originally came from <windows.h>.
+// 共有ドライバーが使う型のうち、もともと <windows.h> にあったもの。
 using BYTE = unsigned char;
 using USHORT = unsigned short;
 using SHORT = short;
@@ -55,7 +55,7 @@ inline void Sleep(DWORD ms) { std::this_thread::sleep_for(std::chrono::milliseco
 inline unsigned long long PlatNowMs() { return GetTickCount64(); }
 inline void PlatSleep(unsigned long ms) { Sleep((DWORD)ms); }
 
-// std::wstring is UTF-32 on Linux; hidapi/sysfs paths and names are UTF-8.
+// Linux では std::wstring は UTF-32。hidapi や sysfs のパスと名前は UTF-8。
 inline std::wstring Utf8ToWide(const std::string& s) {
     std::wstring out;
     out.reserve(s.size());

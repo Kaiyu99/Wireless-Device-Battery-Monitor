@@ -1,9 +1,9 @@
-// "Request support for a device" window and the extra `--dump` sections. See report.h.
+// 「デバイスのサポートをリクエスト」ウィンドウと、`--dump` の追加セクション。詳しくは report.h を参照。
 //
-// Privacy: the only network call in the app is the POST in SendRequest, made when the user clicks Send.
-// What is sent is shown word for word in the window first: the device name, its type, the user's optional
-// name and notes, and a short technical summary (vendor/product id, HID usage pages and report sizes, USB
-// interface classes, the Windows build). No serial numbers, device paths or Bluetooth addresses.
+// プライバシー: アプリが行う通信は、ユーザーが「送信」を押したときの SendRequest の POST だけ。
+// 送る内容は先にウィンドウにそのまま表示する: デバイス名、種類、任意で入力されたユーザー名とメモ、短い技術情報
+// （ベンダー ID / プロダクト ID、HID の使用ページとレポートサイズ、USB インターフェースのクラス、Windows のビルド）。
+// シリアル番号、デバイスのパス、Bluetooth アドレスは送らない。
 #include "report.h"
 
 #include <commctrl.h>
@@ -31,7 +31,7 @@ const DEVPROPKEY kBusReportedDesc = { { 0x540B947E, 0x8B40, 0x45BC, { 0xA8, 0xA2
 const DEVPROPKEY kBtBattery = { { 0x104EA319, 0x6EE2, 0x4701, { 0xBD, 0x47, 0x8D, 0xDB, 0xF4, 0x25, 0xBB, 0xE5 } }, 2 };
 const GUID kBluetoothClass = { 0xE0CBF06C, 0xCD8B, 0x4647, { 0xBB, 0x8A, 0x26, 0x3B, 0x43, 0xF0, 0xF9, 0x74 } };
 
-// ---- device scan --------------------------------------------------------------------------------
+// ---- デバイスの検索 --------------------------------------------------------------------------------
 
 std::wstring Upper(std::wstring s) {
     for (auto& c : s) c = (wchar_t)towupper(c);
@@ -57,14 +57,14 @@ std::wstring StrProp(HDEVINFO di, SP_DEVINFO_DATA& dd, const DEVPROPKEY& key) {
 }
 
 std::wstring DeviceName(HDEVINFO di, SP_DEVINFO_DATA& dd) {
-    std::wstring n = StrProp(di, dd, kBusReportedDesc);  // what the device itself reports, e.g. "Pulsar 8K Dongle"
+    std::wstring n = StrProp(di, dd, kBusReportedDesc);  // デバイス自身が報告する名前。例: "Pulsar 8K Dongle"
     if (n.empty()) n = RegProp(di, dd, SPDRP_FRIENDLYNAME);
     if (n.empty()) n = RegProp(di, dd, SPDRP_DEVICEDESC);
     return n;
 }
 
-// Reads the vendor/product id from a USB instance id or HID path ("VID_046D&PID_C547") or a Bluetooth
-// HID path ("_VID&0002046D_PID&B023", where the first four digits name the id's source).
+// USB のインスタンス ID や HID のパス（"VID_046D&PID_C547"）、または Bluetooth の HID パス
+// （"_VID&0002046D_PID&B023"。先頭 4 桁は ID の出どころを表す）から、ベンダー ID / プロダクト ID を読み取る。
 bool ParseIds(const std::wstring& id, USHORT& vid, USHORT& pid) {
     std::wstring u = Upper(id);
     size_t v = u.find(L"VID_"), p = u.find(L"PID_");
@@ -92,12 +92,12 @@ int InterfaceOf(const std::wstring& path) {
 struct UsbDevice {
     USHORT vid = 0, pid = 0;
     std::wstring name;
-    std::map<std::wstring, int> interfaces;  // "HIDClass", "MEDIA (usbaudio)", "Ports (usbser)" ... -> count
+    std::map<std::wstring, int> interfaces;  // "HIDClass"、"MEDIA (usbaudio)"、"Ports (usbser)" ... -> 件数
     bool hub = false;
 };
 
-// Every present USB device, including the ones that have no HID interface (audio-only or WinUSB dongles,
-// serial adapters): those never show up in the HID list, which is why some devices were missing from --dump.
+// 接続中のすべての USB デバイス。HID インターフェースがないもの（音声専用や WinUSB のドングル、シリアル変換器）も
+// 含む。これらは HID の一覧には出てこないため、以前は --dump に載らないデバイスがあった。
 std::vector<UsbDevice> EnumUsb() {
     std::map<DWORD, UsbDevice> byId;
     HDEVINFO di = SetupDiGetClassDevsW(nullptr, L"USB", nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT);
@@ -107,7 +107,7 @@ std::vector<UsbDevice> EnumUsb() {
         wchar_t idBuf[512] = {};
         if (!SetupDiGetDeviceInstanceIdW(di, &dd, idBuf, 511, nullptr)) continue;
         USHORT vid = 0, pid = 0;
-        if (!ParseIds(idBuf, vid, pid)) continue;  // root hubs and host controllers have no ids
+        if (!ParseIds(idBuf, vid, pid)) continue;  // ルートハブとホストコントローラーには ID がない
         UsbDevice& d = byId[((DWORD)vid << 16) | pid];
         d.vid = vid;
         d.pid = pid;
@@ -117,7 +117,7 @@ std::vector<UsbDevice> EnumUsb() {
         if (!isInterface) {
             if (d.name.empty()) d.name = DeviceName(di, dd);
             if (Upper(svc).find(L"HUB") != std::wstring::npos) d.hub = true;
-            if (Upper(cls) != L"USB") d.interfaces[label]++;  // single-function device: the device is its own interface
+            if (Upper(cls) != L"USB") d.interfaces[label]++;  // 単機能デバイス: デバイス自体がインターフェースになっている
         } else {
             d.interfaces[label]++;
         }
@@ -135,8 +135,8 @@ struct Unopened {
     std::wstring name;
 };
 
-// HID collections EnumHid() could not open (held exclusively by another program, or access denied).
-// EnumHid() skips them, so before this they were simply missing from --dump.
+// EnumHid() が開けなかった HID コレクション（他のプログラムが排他的に握っている、またはアクセスが拒否された）。
+// EnumHid() はこれらを飛ばすので、以前は --dump にまったく載っていなかった。
 std::vector<Unopened> UnopenedHid(const std::vector<HidColl>& opened) {
     std::set<std::wstring> seen;
     for (const auto& c : opened) seen.insert(Upper(c.path));
@@ -166,12 +166,12 @@ std::vector<Unopened> UnopenedHid(const std::vector<HidColl>& opened) {
     return out;
 }
 
-// One physical device (by vendor/product id) that the user can pick in the window.
+// ウィンドウでユーザーが選べる、物理的なデバイス 1 台（ベンダー ID / プロダクト ID 単位）。
 struct Candidate {
     USHORT vid = 0, pid = 0;
     std::wstring name;
-    std::vector<std::wstring> hid;              // "if2 FFFF:0001 65/65/65" per collection
-    std::map<std::wstring, int> usbInterfaces;  // from EnumUsb
+    std::vector<std::wstring> hid;              // コレクションごとに "if2 FFFF:0001 65/65/65"
+    std::map<std::wstring, int> usbInterfaces;  // EnumUsb から
     bool vendor = false, mouse = false, keyboard = false, gamepad = false, audio = false;
     const wchar_t* Type() const {
         if (gamepad) return L"controller";
@@ -198,7 +198,7 @@ std::vector<Candidate> BuildCandidates() {
         if (c.page() == 0x01 && c.usage() == 0x02) d.mouse = true;
         if (c.page() == 0x01 && c.usage() == 0x06) d.keyboard = true;
         if (c.page() == 0x01 && (c.usage() == 0x04 || c.usage() == 0x05)) d.gamepad = true;
-        if (c.page() == 0x0B) d.audio = true;  // telephony page: headset buttons
+        if (c.page() == 0x0B) d.audio = true;  // テレフォニーページ: ヘッドセットのボタン
     }
     for (const auto& u : UnopenedHid(colls)) {
         Candidate& d = m[((DWORD)u.vid << 16) | u.pid];
@@ -221,7 +221,7 @@ std::vector<Candidate> BuildCandidates() {
         if (d.name.empty()) d.name = L"Unknown device";
         out.push_back(d);
     }
-    // Devices with a vendor-defined collection or audio first: that is where battery protocols live.
+    // メーカー定義のコレクションや音声を持つデバイスを先に並べる: バッテリーのプロトコルがあるのはそこだから。
     std::stable_sort(out.begin(), out.end(), [](const Candidate& a, const Candidate& b) {
         bool ia = a.vendor || a.audio, ib = b.vendor || b.audio;
         if (ia != ib) return ia;
@@ -240,7 +240,7 @@ std::wstring WindowsBuild() {
     return std::wstring(build) + L"." + std::to_wstring(ubr);
 }
 
-// The short technical summary that goes into the request's notes (the API allows 500 characters).
+// リクエストのメモに入れる短い技術情報（API の上限は 500 文字）。
 std::wstring TechSummary(const Candidate* c) {
     std::wstring s = L"[Sent from the Wireless Battery app, Windows build " + WindowsBuild() + L"] ";
     if (!c) return s + L"Device not in the app's list.";
@@ -266,7 +266,7 @@ std::wstring TechSummary(const Candidate* c) {
     return s;
 }
 
-// ---- sending --------------------------------------------------------------------------------------
+// ---- 送信 --------------------------------------------------------------------------------------
 
 std::string Utf8(const std::wstring& s) {
     int n = WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0, nullptr, nullptr);
@@ -315,7 +315,7 @@ std::string RequestJson(const Request& r) {
     return j;
 }
 
-// POSTs the JSON body. Returns the HTTP status (0 = could not reach the server) and the reply body.
+// JSON の本文を POST する。HTTP ステータス（0 = サーバーに接続できなかった）と応答の本文を返す。
 int Post(const std::string& body, std::string& reply) {
     int status = 0;
     HINTERNET s = WinHttpOpen(L"WirelessBattery", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -344,7 +344,7 @@ int Post(const std::string& body, std::string& reply) {
     return status;
 }
 
-// The "error" string of a JSON reply, or empty.
+// JSON の応答に含まれる "error" の文字列。なければ空。
 std::wstring JsonError(const std::string& reply) {
     size_t k = reply.find("\"error\"");
     if (k == std::string::npos) return L"";
@@ -358,18 +358,18 @@ std::wstring JsonError(const std::string& reply) {
     return Wide(v);
 }
 
-// What the site answered; the message is put together (and translated) on the UI thread.
+// サイトの応答内容。メッセージの組み立て（と翻訳）は UI スレッドで行う。
 struct SendResult {
     int status = 0;
     bool repeat = false;
-    std::wstring error;  // the site's own sentence for a 400
+    std::wstring error;  // 400 のときにサイトが返す文
 };
 
 SendResult SendRequest(Request req) {
     std::string reply;
     int status = Post(RequestJson(req), reply);
     if (status == 400 && req.name.empty() && Upper(JsonError(reply)).find(L"NAME") != std::wstring::npos) {
-        req.name = L"App user";  // the site needs a name: use a neutral one rather than asking again
+        req.name = L"App user";  // サイトは名前を必須にしている: もう一度聞くのではなく、無難な名前を使う
         reply.clear();
         status = Post(RequestJson(req), reply);
     }
@@ -387,7 +387,7 @@ std::wstring ResultMessage(const SendResult& r) {
     return TF(L"The site answered with an error ({code}). Please try again later.", { { L"code", std::to_wstring(r.status) } });
 }
 
-// ---- window ---------------------------------------------------------------------------------------
+// ---- ウィンドウ ---------------------------------------------------------------------------------------
 
 enum : int { IDC_DEVICE = 101, IDC_MODEL, IDC_TYPE, IDC_NAME, IDC_NOTES, IDC_PREVIEW, IDC_COPY, IDC_SEND, IDC_STATUS };
 constexpr UINT WM_CANDIDATES = WM_APP + 20, WM_SENT = WM_APP + 21, WM_FULLREPORT = WM_APP + 22;
@@ -500,7 +500,7 @@ void CreateControls() {
     SendMessageW(model, EM_LIMITTEXT, 80, 0);
     Add(L"STATIC", T(L"Type"), 0, -1, L, 174, W, 18);
     HWND type = Add(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP, IDC_TYPE, L, 192, 200, 200);
-    for (auto t : kTypes) SendMessageW(type, CB_ADDSTRING, 0, (LPARAM)T(t));  // shown translated, sent in English
+    for (auto t : kTypes) SendMessageW(type, CB_ADDSTRING, 0, (LPARAM)T(t));  // 表示は翻訳し、送信は英語で行う
     SendMessageW(type, CB_SETCURSEL, 4, 0);
     Add(L"STATIC", T(L"Your name (optional, kept private and never shown)"), 0, -1, L, 224, W, 18);
     HWND name = Add(WC_EDITW, L"", ES_AUTOHSCROLL | WS_TABSTOP, IDC_NAME, L, 242, W, 24, WS_EX_CLIENTEDGE);
@@ -576,8 +576,8 @@ bool LightTheme(const wchar_t* value) {
     return v != 0;
 }
 
-// Title bar follows the Windows app theme, with the matching icon: white (icon 1) on dark, black (icon 2) on
-// light. The taskbar button's icon follows the taskbar's own theme.
+// タイトルバーは Windows のアプリのテーマに合わせ、アイコンもそれに合わせる: ダークなら白（アイコン 1）、
+// ライトなら黒（アイコン 2）。タスクバーのボタンのアイコンは、タスクバー自身のテーマに合わせる。
 void ApplyTheme(HWND h) {
     bool lightApps = LightTheme(L"AppsUseLightTheme"), lightTaskbar = LightTheme(L"SystemUsesLightTheme");
     using SetAttrFn = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
@@ -664,7 +664,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             g_cands.clear();
             g_scanned = g_sending = false;
             if (g_font) { DeleteObject(g_font); g_font = nullptr; }
-            if (g_quitOnClose) PostQuitMessage(0);  // opened with --report: the process ends with the window
+            if (g_quitOnClose) PostQuitMessage(0);  // --report で開いた場合: ウィンドウを閉じるとプロセスも終わる
             return 0;
     }
     return DefWindowProcW(h, msg, wp, lp);
@@ -694,7 +694,7 @@ void Show(HINSTANCE inst, HWND owner) {
         RegisterClassExW(&wc);
         registered = true;
     }
-    // Size for the client area at the monitor's DPI, centred on the screen with the cursor.
+    // モニターの DPI に合わせたクライアント領域のサイズ。カーソルのある画面の中央に配置する。
     POINT pt;
     GetCursorPos(&pt);
     HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
@@ -750,7 +750,7 @@ std::wstring DumpExtras() {
         for (DWORD i = 0; SetupDiEnumDeviceInfo(di, i, &dd); i++) {
             wchar_t idBuf[512] = {};
             SetupDiGetDeviceInstanceIdW(di, &dd, idBuf, 511, nullptr);
-            if (Upper(idBuf).rfind(L"BTH", 0) != 0) continue;  // the radio itself and its services
+            if (Upper(idBuf).rfind(L"BTH", 0) != 0) continue;  // Bluetooth の無線機そのものと、そのサービス
             std::wstring name = RegProp(di, dd, SPDRP_FRIENDLYNAME);
             if (name.empty()) continue;
             BYTE level = 0;

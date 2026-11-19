@@ -1,5 +1,5 @@
-// The Windows HID backend. Linux uses hid_linux.cpp instead; this file is compiled only when
-// _WIN32 is defined so the existing Windows behaviour is byte-for-byte unchanged.
+// Windows 用の HID バックエンド。Linux では代わりに hid_linux.cpp を使う。このファイルは _WIN32 が
+// 定義されているときだけコンパイルされるので、既存の Windows の動作は 1 バイトも変わらない。
 #ifdef _WIN32
 
 #include "hid.h"
@@ -110,12 +110,12 @@ int HidDev::Read(std::vector<BYTE>& buf, int timeoutMs) {
             done = GetOverlappedResult(h_, &ov, &got, FALSE) != FALSE;
         } else {
             CancelIo(h_);
-            done = GetOverlappedResult(h_, &ov, &got, TRUE) != FALSE;  // it may have completed meanwhile
+            done = GetOverlappedResult(h_, &ov, &got, TRUE) != FALSE;  // その間に完了しているかもしれない
         }
     }
     CloseHandle(ov.hEvent);
     if (!done || got == 0) return -1;
-    size_t off = tmp[0] == 0 ? 1 : 0;  // hidapi semantics: drop the "no report ID" byte
+    size_t off = tmp[0] == 0 ? 1 : 0;  // hidapi の仕様に合わせる: 「レポート ID なし」の先頭バイトを取り除く
     buf.assign(tmp.begin() + off, tmp.begin() + got);
     return (int)buf.size();
 }
@@ -189,7 +189,7 @@ bool HidDev::GetFeatureByte(BYTE reportId, BYTE& value) {
     return true;
 }
 
-// ---- helpers ----------------------------------------------------------------------------------
+// ---- ヘルパー ----------------------------------------------------------------------------------
 
 std::wstring HidProduct(const HidColl& c) {
     HANDLE h = CreateFileW(c.path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);

@@ -1,4 +1,4 @@
-// Wireless Battery - tray app showing the battery level of wireless mice, headsets and Bluetooth devices.
+// Wireless Battery - ワイヤレスのマウス、ヘッドセット、Bluetooth デバイスのバッテリー残量を表示する常駐アプリ。
 #include <windows.h>
 #include <shellapi.h>
 #include <dbt.h>
@@ -26,15 +26,23 @@ constexpr UINT WM_RESULTS = WM_APP + 2;
 constexpr UINT WM_WIDGET_CLICK = WM_APP + 3;
 constexpr UINT_PTR TIMER_DEBOUNCE = 1;
 constexpr UINT_PTR TIMER_WIDGET = 2;
+constexpr UINT_PTR TIMER_NOTIFY_ICON = 3;  // 通知専用のトレイアイコンを消す
 constexpr DWORD POLL_INTERVAL_MS = 60 * 1000;
-constexpr int LOW_BATTERY = 15;
+constexpr int LOW_BATTERY_DEFAULT = 15;
+constexpr int LOW_BATTERY_CHOICES[] = { 5, 10, 15, 20, 25, 30 };  // 「バッテリー低下の警告」メニュー
+constexpr int CHARGED_NOTIFY_DEFAULT = 100;
+constexpr int CHARGED_NOTIFY_CHOICES[] = { 80, 90, 100 };        // 「充電完了の通知」メニュー（0 = オフ）
 constexpr UINT PLACEHOLDER_ID = 1;
+constexpr UINT NOTIFY_ICON_ID = 2;   // 通知が出ている間だけ表示するトレイアイコン（タスクバーのウィジェット表示のとき）
+constexpr UINT NOTIFY_ICON_MS = 15 * 1000;
 
 enum MenuId : UINT {
     ID_REFRESH = 100, ID_AUTOSTART, ID_HIDE_LAST_KNOWN, ID_WIDGET_BACKGROUND, ID_EXIT, ID_MODE_WIDGET, ID_MODE_TRAY, ID_SUPPORT, ID_REPORT,
-    ID_BRAND_COLORS, ID_STACKED,
-    ID_LANG_AUTO = 400, ID_LANG_ADD, ID_LANG_FIRST,  // "Language": ID_LANG_FIRST + 0..63
-    ID_MONITOR_ALL = 300, ID_MONITOR_MAIN, ID_MONITOR_FIRST,  // "Show the widget on": ID_MONITOR_FIRST + 0..31
+    ID_BRAND_COLORS, ID_STACKED, ID_SPLIT_BUDS,
+    ID_LANG_AUTO = 400, ID_LANG_ADD, ID_LANG_FIRST,  // 「言語」: ID_LANG_FIRST + 0..63
+    ID_MONITOR_ALL = 300, ID_MONITOR_MAIN, ID_MONITOR_FIRST,  // 「ウィジェットの表示先」: ID_MONITOR_FIRST + 0..31
+    ID_LOW_FIRST = 500,                          // 「バッテリー低下の警告」: ID_LOW_FIRST + LOW_BATTERY_CHOICES 内の位置
+    ID_CHARGED_OFF = 520, ID_CHARGED_FIRST,      // 「充電完了の通知」: ID_CHARGED_FIRST + CHARGED_NOTIFY_CHOICES 内の位置
     ID_DEVICE_FIRST = 1000
 };
 enum DeviceCmd : UINT { DEV_TOGGLE, DEV_LEFT, DEV_RIGHT, DEV_STRIDE = 4 };
@@ -50,29 +58,34 @@ HWND g_hwnd;
 HANDLE g_refreshEvt, g_stopEvt, g_worker;
 UINT g_taskbarCreatedMsg;
 bool g_lightTaskbar;
-bool g_wantWidget = true;      // user's choice: taskbar widget (default) or tray icons
-bool g_useWidget = false;      // what is actually shown right now
-bool g_hideLastKnown = false;  // hide (last known) / asleep devices from taskbar and tray
-std::wstring g_widgetMonitor = L"all";  // which taskbars show the widget: "all", "main" or one monitor id
-bool g_widgetBackground = false;  // draw a plate behind the taskbar text (transparent taskbar themes)
-bool g_stacked = false;      // icon above the percentage (menu option)
-bool g_brandColors = false;  // off by default; known brands get their color (Razer green, Logitech blue, ...)
+bool g_wantWidget = true;      // ユーザーの選択: タスクバーのウィジェット（既定）か、トレイアイコンか
+bool g_useWidget = false;      // 今実際に表示しているもの
+bool g_hideLastKnown = false;  // （最後の値の）デバイスやスリープ中のデバイスを、タスクバーとトレイから隠す
+std::wstring g_widgetMonitor = L"all";  // ウィジェットを表示するタスクバー: "all"、"main"、またはモニター 1 台の ID
+bool g_widgetBackground = false;  // タスクバーの文字の後ろに背景を描く（透明なタスクバーのテーマ向け）
+bool g_stacked = false;      // アイコンをパーセントの上に置く（メニューの設定）
+bool g_brandColors = false;  // 既定はオフ。知られたブランドはその色で表示する（Razer の緑、Logitech の青など）
+int g_lowBattery = LOW_BATTERY_DEFAULT;          // この残量（%）以下でバッテリー低下とみなす（メニューの設定）
+int g_chargedNotify = CHARGED_NOTIFY_DEFAULT;    // 充電中のデバイスがこの残量（%）に達したら通知する。0 = オフ
+bool g_notifyIcon = false;                       // 通知専用のトレイアイコンを表示している
+bool g_splitBuds = true;                         // 左右に分かれたイヤホンを 1 台ずつ表示する（メニューの設定）
 
 struct TrayEntry {
     UINT uid = 0;
     DeviceStatus st;
-    int lastPct = -1;        // last known percentage, kept while the device sleeps
+    int lastPct = -1;        // 最後にわかった残量。デバイスがスリープ中も保持する
     ULONGLONG lastSeen = 0;
     bool added = false;
     bool lowWarned = false;
-    std::wstring iconSig;    // what the current icon shows, to avoid needless redraws
+    bool chargedNotified = false;  // 今回の充電で「充電完了」を通知済み。残量が目標を下回ると再び通知できる状態に戻る
+    std::wstring iconSig;    // 今のアイコンの表示内容。不要な再描画を避けるため
     HICON icon = nullptr;
 };
 std::map<std::wstring, TrayEntry> g_entries;
 bool g_placeholder = false;
 HICON g_placeholderIcon = nullptr;
 
-// ---- helpers ----------------------------------------------------------------------------------
+// ---- ヘルパー ----------------------------------------------------------------------------------
 
 UINT StableId(const std::wstring& key) {
     UINT h = 2166136261u;
@@ -104,7 +117,7 @@ std::wstring ExePath() {
     return p;
 }
 
-// Devices the user chose to hide (by key), stored as a REG_MULTI_SZ.
+// ユーザーが非表示にしたデバイス（キー単位）。REG_MULTI_SZ で保存する。
 std::set<std::wstring> g_hidden;
 
 void LoadHidden() {
@@ -126,8 +139,8 @@ void SaveHidden() {
 
 bool IsHidden(const std::wstring& key) { return g_hidden.count(key) != 0; }
 
-// The user's left-to-right order (device keys), stored as a REG_MULTI_SZ. Devices not in it follow
-// in the default order (by type, then name).
+// ユーザーが決めた左から右への並び順（デバイスのキー）。REG_MULTI_SZ で保存する。ここにないデバイスは
+// 既定の順番（種類、次に名前）で後ろに並ぶ。
 std::vector<std::wstring> g_order;
 
 void LoadOrder() {
@@ -141,7 +154,7 @@ void LoadOrder() {
 }
 
 void SaveOrder() {
-    if (g_order.size() > 64) g_order.resize(64);  // forget long-gone devices
+    if (g_order.size() > 64) g_order.resize(64);  // ずっと前になくなったデバイスは忘れる
     std::wstring multi;
     for (const auto& k : g_order) { multi += k; multi.push_back(L'\0'); }
     multi.push_back(L'\0');
@@ -174,7 +187,7 @@ std::wstring LoadWidgetMonitor() {
     DWORD size = sizeof(buf) - sizeof(wchar_t);
     if (RegGetValueW(HKEY_CURRENT_USER, kSettingsKey, L"WidgetMonitor", RRF_RT_REG_SZ, nullptr, buf, &size) == ERROR_SUCCESS && buf[0])
         return buf;
-    return LoadBoolSetting(L"OtherTaskbars", true) ? L"all" : L"main";  // the earlier on/off toggle
+    return LoadBoolSetting(L"OtherTaskbars", true) ? L"all" : L"main";  // 以前のオン / オフの切り替え設定
 }
 void SaveWidgetMonitor(const std::wstring& v) {
     RegSetKeyValueW(HKEY_CURRENT_USER, kSettingsKey, L"WidgetMonitor", REG_SZ, v.c_str(), (DWORD)((v.size() + 1) * sizeof(wchar_t)));
@@ -187,6 +200,24 @@ void SetWidgetMonitor(const std::wstring& v) {
 bool LoadStacked() { return LoadBoolSetting(L"StackedLayout", false); }
 void SaveStacked(bool on) { SaveBoolSetting(L"StackedLayout", on); }
 bool LoadBrandColors() { return LoadBoolSetting(L"BrandColors", false); }
+bool LoadSplitBuds() { return LoadBoolSetting(L"SplitEarbuds", true); }
+int LoadIntSetting(const wchar_t* name, int defaultVal) {
+    DWORD v = (DWORD)defaultVal, sz = sizeof(v);
+    RegGetValueW(HKEY_CURRENT_USER, kSettingsKey, name, RRF_RT_REG_DWORD, nullptr, &v, &sz);
+    return (int)v;
+}
+void SaveIntSetting(const wchar_t* name, int value) {
+    DWORD v = (DWORD)value;
+    RegSetKeyValueW(HKEY_CURRENT_USER, kSettingsKey, name, REG_DWORD, &v, sizeof(v));
+}
+int LoadLowBattery() {
+    int v = LoadIntSetting(L"LowBatteryPercent", LOW_BATTERY_DEFAULT);
+    return (v >= 1 && v <= 50) ? v : LOW_BATTERY_DEFAULT;
+}
+int LoadChargedNotify() {
+    int v = LoadIntSetting(L"ChargedNotifyPercent", CHARGED_NOTIFY_DEFAULT);
+    return (v == 0 || (v >= 50 && v <= 100)) ? v : CHARGED_NOTIFY_DEFAULT;
+}
 void SaveBrandColors(bool on) { SaveBoolSetting(L"BrandColors", on); }
 
 bool AutostartEnabled() {
@@ -208,10 +239,9 @@ void SetAutostart(bool on) {
     RegCloseKey(k);
 }
 
-// ---- icon rendering ---------------------------------------------------------------------------
-// Draws the percentage as large digits with a small level bar underneath. GDI text is rendered
-// white-on-black into a scratch bitmap and its brightness is used as the alpha channel, which
-// gives smooth edges on the transparent icon.
+// ---- アイコンの描画 ---------------------------------------------------------------------------
+// パーセントを大きな数字で描き、その下に小さな残量バーを描く。GDI の文字を作業用のビットマップに
+// 黒地に白で描き、その明るさをアルファチャンネルとして使うことで、透明なアイコンでも縁がなめらかになる。
 
 struct Rgb { BYTE r, g, b; };
 
@@ -229,7 +259,7 @@ HICON RenderIcon(const std::wstring& text, int barPct, Rgb textColor, Rgb barCol
     bi.bmiHeader.biBitCount = 32;
     bi.bmiHeader.biCompression = BI_RGB;
 
-    // scratch bitmap for the glyphs
+    // 文字を描くための作業用ビットマップ
     const int W = S * 3, H = S * 2;
     bi.bmiHeader.biWidth = W;
     bi.bmiHeader.biHeight = -H;
@@ -259,7 +289,7 @@ HICON RenderIcon(const std::wstring& text, int barPct, Rgb textColor, Rgb barCol
         if (bx1 - bx0 + 1 <= S && by1 - by0 + 1 <= textH) break;
     }
 
-    // final icon bitmap
+    // 最終的なアイコンのビットマップ
     bi.bmiHeader.biWidth = S;
     bi.bmiHeader.biHeight = -S;
     void* ibits = nullptr;
@@ -270,7 +300,7 @@ HICON RenderIcon(const std::wstring& text, int barPct, Rgb textColor, Rgb barCol
     auto put = [&](int x, int y, Rgb c, int a) {
         if (x < 0 || y < 0 || x >= S || y >= S || a <= 0) return;
         a = a * alphaScale / 255;
-        ip[y * S + x] = ((DWORD)a << 24) | ((DWORD)c.r << 16) | ((DWORD)c.g << 8) | c.b;  // straight alpha
+        ip[y * S + x] = ((DWORD)a << 24) | ((DWORD)c.r << 16) | ((DWORD)c.g << 8) | c.b;  // ストレートアルファ（乗算済みでないアルファ）
     };
     if (bx1 >= 0) {
         int gw = bx1 - bx0 + 1, gh = by1 - by0 + 1;
@@ -279,7 +309,7 @@ HICON RenderIcon(const std::wstring& text, int barPct, Rgb textColor, Rgb barCol
             for (int x = 0; x < gw; x++)
                 put(ox + x, oy + y, textColor, sp[(by0 + y) * W + (bx0 + x)] & 0xFF);
     }
-    // level bar: faint track + filled part
+    // 残量バー: 薄い下地 + 塗りつぶし部分
     int fill = barPct < 0 ? 0 : std::max(barPct > 0 ? 1 : 0, (barPct * S + 50) / 100);
     for (int y = S - barH; y < S; y++)
         for (int x = 0; x < S; x++) {
@@ -314,16 +344,16 @@ HICON IconFor(int pct, bool charging, bool dim, Accent accent) {
     Rgb fg = Foreground();
     BrandColor bc = AccentColor(accent, g_lightTaskbar);
     Rgb bar = charging        ? Rgb{ 0, 170, 255 }
-            : pct <= LOW_BATTERY ? Rgb{ 232, 32, 48 }
+            : pct <= g_lowBattery ? Rgb{ 232, 32, 48 }
             : pct <= 30       ? Rgb{ 255, 150, 0 }
             : accent != Accent::None ? Rgb{ bc.r, bc.g, bc.b }
                               : Rgb{ 30, 190, 90 };
-    Rgb text = (!charging && pct >= 0 && pct <= LOW_BATTERY) ? Rgb{ 240, 50, 60 } : fg;
+    Rgb text = (!charging && pct >= 0 && pct <= g_lowBattery) ? Rgb{ 240, 50, 60 } : fg;
     std::wstring t = pct < 0 ? L"?" : std::to_wstring(pct);
     return RenderIcon(t, pct, text, bar, dim);
 }
 
-// ---- tray management --------------------------------------------------------------------------
+// ---- トレイの管理 --------------------------------------------------------------------------
 
 void CopyTip(wchar_t* dst, size_t cap, const std::wstring& s) {
     wcsncpy(dst, s.c_str(), cap - 1);
@@ -345,7 +375,7 @@ std::wstring StatusText(const TrayEntry& e) {
 }
 
 void TrayCall(DWORD msg, UINT uid, HICON icon, const std::wstring& tip, const wchar_t* infoTitle = nullptr,
-              const std::wstring& info = L"") {
+              const std::wstring& info = L"", DWORD infoFlags = NIIF_WARNING) {
     NOTIFYICONDATAW nid{ sizeof(nid) };
     nid.hWnd = g_hwnd;
     nid.uID = uid;
@@ -357,7 +387,7 @@ void TrayCall(DWORD msg, UINT uid, HICON icon, const std::wstring& tip, const wc
         nid.uFlags |= NIF_INFO;
         CopyTip(nid.szInfoTitle, ARRAYSIZE(nid.szInfoTitle), infoTitle);
         CopyTip(nid.szInfo, ARRAYSIZE(nid.szInfo), info);
-        nid.dwInfoFlags = NIIF_WARNING;
+        nid.dwInfoFlags = infoFlags;
     }
     Shell_NotifyIconW(msg, &nid);
     if (msg == NIM_ADD) {
@@ -411,8 +441,8 @@ void ApplyEntry(TrayEntry& e) {
 
     const wchar_t* infoTitle = nullptr;
     std::wstring info;
-    if (s.charging || shown > LOW_BATTERY + 10) e.lowWarned = false;
-    if (!s.charging && s.percent >= 0 && s.percent <= LOW_BATTERY && !e.lowWarned) {
+    if (s.charging || shown > g_lowBattery + 10) e.lowWarned = false;
+    if (!s.charging && s.percent >= 0 && s.percent <= g_lowBattery && !e.lowWarned) {
         e.lowWarned = true;
         infoTitle = T(L"Low battery");
         info = TF(L"{name} is at {percent}%", { { L"name", s.name }, { L"percent", std::to_wstring(s.percent) } });
@@ -421,7 +451,7 @@ void ApplyEntry(TrayEntry& e) {
     e.added = true;
 }
 
-int KindOrder(DeviceKind k) {  // default order: headset first, then mouse, ...
+int KindOrder(DeviceKind k) {  // 既定の順番: ヘッドセットが先、次にマウス、...
     switch (k) {
         case DeviceKind::Headset:  return 0;
         case DeviceKind::Mouse:    return 1;
@@ -434,9 +464,8 @@ int KindOrder(DeviceKind k) {  // default order: headset first, then mouse, ...
 
 bool IsShown(const TrayEntry& e) { return e.st.connected && !IsEntryHidden(e); }
 
-// Entries in left-to-right order: the user's order first, then the rest by type and name. Works the
-// same for every kind of device (receivers, Bluetooth, controllers, HeadsetControl) as it only uses
-// the device key.
+// 左から右の順に並べたエントリー: ユーザーが決めた順番が先、残りは種類と名前の順。デバイスのキーだけを
+// 使うので、どの種類のデバイス（レシーバー、Bluetooth、コントローラー、HeadsetControl）でも同じように動く。
 std::vector<TrayEntry*> OrderedEntries(bool shownOnly) {
     std::vector<TrayEntry*> list;
     for (auto& [k, e] : g_entries)
@@ -450,7 +479,7 @@ std::vector<TrayEntry*> OrderedEntries(bool shownOnly) {
         if (ra != rb) return ra < rb;
         int ka = KindOrder(a->st.kind), kb = KindOrder(b->st.kind);
         if (ka != kb) return ka < kb;
-        return a->st.name != b->st.name ? a->st.name < b->st.name : a->st.key < b->st.key;  // same name: keep a fixed order
+        return a->st.name != b->st.name ? a->st.name < b->st.name : a->st.key < b->st.key;  // 名前が同じ: 順番を固定する
     });
     return list;
 }
@@ -458,10 +487,13 @@ std::vector<TrayEntry*> OrderedEntries(bool shownOnly) {
 void UpdateWidget() {
     if (!g_useWidget) return;
     std::vector<TrayEntry*> list = OrderedEntries(true);
-    // Two devices of one kind share an icon: give each a tiny caption so they can be told apart.
+    // 同じ種類のデバイス 2 台は同じアイコンになる: 見分けられるよう、それぞれに小さなキャプションを付ける。
     std::vector<LabelInput> labelIn;
     for (auto* e : list) labelIn.push_back({ e->st.kind, e->st.name });
     std::vector<std::wstring> labels = ShortLabels(labelIn, 3);
+    for (size_t i = 0; i < list.size(); i++)
+        if (list[i]->st.chargingCase) labels[i].clear();  // ケースは専用のアイコンなのでキャプション不要
+        else if (!list[i]->st.caption.empty()) labels[i] = list[i]->st.caption;  // 左右のイヤホン: 常に "L" / "R"
     std::vector<WidgetItem> items;
     std::wstring tip;
     for (auto* e : list) {
@@ -471,8 +503,9 @@ void UpdateWidget() {
         if (e->st.percent >= 0) it.text = T(e->st.levelText);
         it.charging = e->st.charging;
         it.dim = e->st.percent < 0;
-        it.low = !it.charging && it.percent >= 0 && it.percent <= LOW_BATTERY;
+        it.low = !it.charging && it.percent >= 0 && it.percent <= g_lowBattery;
         it.bluetooth = e->st.via == L"Bluetooth";
+        it.chargingCase = e->st.chargingCase;
         it.label = labels[items.size()];
         it.accent = AccentFor(e->st);
         items.push_back(it);
@@ -483,7 +516,62 @@ void UpdateWidget() {
     widget::SetItems(items, tip);
 }
 
-void OnResults(std::vector<DeviceStatus>& results) {
+// 通知を表示する。トレイアイコン表示ならデバイス自身のアイコンから出す。それ以外（タスクバーのウィジェット
+// 表示、またはデバイスが非表示）の場合は、通知のためだけにアプリのアイコンでトレイアイコンを追加し、しばらくして消す。
+void Notify(TrayEntry& e, const wchar_t* title, const std::wstring& text, DWORD flags) {
+    if (e.added) {
+        TrayCall(NIM_MODIFY, e.uid, e.icon, e.st.name + L"\n" + StatusText(e), title, text, flags);
+        return;
+    }
+    static HICON appIcon[2] = {};
+    HICON& icon = appIcon[g_lightTaskbar ? 1 : 0];
+    if (!icon)
+        icon = (HICON)LoadImageW(g_inst, MAKEINTRESOURCEW(g_lightTaskbar ? 2 : 1), IMAGE_ICON,
+                                 GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
+    TrayCall(g_notifyIcon ? NIM_MODIFY : NIM_ADD, NOTIFY_ICON_ID, icon, kAppName, title, text, flags);
+    g_notifyIcon = true;
+    SetTimer(g_hwnd, TIMER_NOTIFY_ICON, NOTIFY_ICON_MS, nullptr);
+}
+
+void RemoveNotifyIcon() {
+    KillTimer(g_hwnd, TIMER_NOTIFY_ICON);
+    if (g_notifyIcon) { TrayDelete(NOTIFY_ICON_ID); g_notifyIcon = false; }
+}
+
+// 「充電完了」の通知: 充電中のデバイスが選んだ残量に達したとき、1 回の充電につき 1 回だけ出す。
+void CheckCharged(TrayEntry& e) {
+    const auto& s = e.st;
+    if (g_chargedNotify <= 0 || !s.connected || s.percent < 0) return;
+    if (s.percent < g_chargedNotify) { e.chargedNotified = false; return; }
+    if (!s.charging || e.chargedNotified) return;
+    e.chargedNotified = true;
+    Notify(e, T(L"Charged"),
+           TF(L"{name} is charged to {percent}%", { { L"name", s.name }, { L"percent", std::to_wstring(s.percent) } }), NIIF_INFO);
+}
+
+// 「左右のイヤホンを別々に表示」: 左右の残量がわかるイヤホンを、片側ずつ（とケース）に分ける。
+// キーは元のキー + ":L" / ":R" / ":C"。残量がわからない側（ケースに入っているなど）は接続なし（非表示）にする。
+std::vector<DeviceStatus> SplitEarbuds(const std::vector<DeviceStatus>& results) {
+    std::vector<DeviceStatus> out;
+    for (const auto& s : results) {
+        if (!g_splitBuds || s.buds.size() < 2 || !s.connected) { out.push_back(s); continue; }
+        for (const auto& b : s.buds) {
+            DeviceStatus part = s;
+            part.buds.clear();
+            part.key = s.key + L":" + b.side;
+            part.name = s.name + L" (" + (b.label.empty() ? b.side : std::wstring(T(b.label.c_str()))) + L")";
+            part.caption = b.side;
+            part.chargingCase = b.isCase;
+            part.percent = b.percent;
+            part.connected = b.percent >= 0;
+            out.push_back(part);
+        }
+    }
+    return out;
+}
+
+void OnResults(std::vector<DeviceStatus>& polled) {
+    std::vector<DeviceStatus> results = SplitEarbuds(polled);
     std::map<std::wstring, bool> seen;
     for (auto& s : results) {
         auto& e = g_entries[s.key];
@@ -493,10 +581,11 @@ void OnResults(std::vector<DeviceStatus>& results) {
         e.lastSeen = GetTickCount64();
         seen[s.key] = true;
         ApplyEntry(e);
+        CheckCharged(e);
     }
     for (auto it = g_entries.begin(); it != g_entries.end();) {
         auto& e = it->second;
-        // Some receivers drop sleeping devices from the link; keep showing the last value for a while.
+        // スリープ中のデバイスを接続から外してしまうレシーバーがある。しばらくは最後の値を表示し続ける。
         bool inGrace = !seen.count(it->first) && e.st.graceSec > 0 && e.st.connected &&
                        GetTickCount64() - e.lastSeen < (ULONGLONG)e.st.graceSec * 1000;
         if (inGrace) {
@@ -516,8 +605,8 @@ void OnResults(std::vector<DeviceStatus>& results) {
     UpdateWidget();
 }
 
-// Makes the actual display match the chosen mode; falls back to tray icons if the taskbar
-// widget cannot be created (e.g. Explorer not ready yet). Called once a second.
+// 実際の表示を選ばれた表示方法に合わせる。タスクバーのウィジェットを作れない場合（エクスプローラーの準備が
+// まだなど）はトレイアイコンに切り替える。1 秒に 1 回呼ばれる。
 void Reconcile() {
     bool alive = g_wantWidget && widget::Alive();
     if (g_wantWidget && !alive) alive = widget::Create(g_inst, g_hwnd, WM_WIDGET_CLICK, g_lightTaskbar);
@@ -559,7 +648,7 @@ void ReAddAll() {
     UpdatePlaceholder();
 }
 
-// Switches the UI language ("" = follow Windows) and redraws everything that shows text.
+// UI の言語を切り替え（"" = Windows に従う）、文字を表示しているものをすべて描き直す。
 void SetLanguage(const std::wstring& code);
 
 void RedrawAll() {
@@ -574,7 +663,7 @@ void RedrawAll() {
 
 void SetLanguage(const std::wstring& code) {
     i18n::SetChoice(code);
-    RedrawAll();  // tray tooltips and the placeholder text
+    RedrawAll();  // トレイのツールチップと、仮のアイコンの文字
     UpdateWidget();
 }
 
@@ -582,6 +671,26 @@ void SetStacked(bool on) {
     g_stacked = on;
     SaveStacked(on);
     widget::SetStacked(on);
+}
+
+void SetLowBattery(int pct) {
+    g_lowBattery = pct;
+    SaveIntSetting(L"LowBatteryPercent", pct);
+    for (auto& [k, e] : g_entries) e.lowWarned = false;  // 新しいしきい値で改めて警告する
+    RedrawAll();
+    UpdateWidget();
+}
+
+void SetChargedNotify(int pct) {
+    g_chargedNotify = pct;
+    SaveIntSetting(L"ChargedNotifyPercent", pct);
+    for (auto& [k, e] : g_entries) e.chargedNotified = e.st.percent >= pct && pct > 0;  // すでに達しているデバイスで通知が一気に出ないようにする
+}
+
+void SetSplitBuds(bool on) {
+    g_splitBuds = on;
+    SaveBoolSetting(L"SplitEarbuds", on);
+    SetEvent(g_refreshEvt);  // 次の取得結果から新しい表示にする
 }
 
 void SetBrandColors(bool on) {
@@ -600,7 +709,7 @@ void ToggleHidden(const std::wstring& key) {
     UpdateWidget();
 }
 
-// Swaps a shown device with its neighbour (dir -1 = left, +1 = right) and remembers the new order.
+// 表示中のデバイスを隣と入れ替え（dir -1 = 左、+1 = 右）、新しい順番を保存する。
 void MoveEntry(const std::wstring& key, int dir) {
     std::vector<TrayEntry*> list = OrderedEntries(true);
     auto pos = std::find_if(list.begin(), list.end(), [&](const TrayEntry* e) { return e->st.key == key; });
@@ -610,7 +719,7 @@ void MoveEntry(const std::wstring& key, int dir) {
     std::swap(list[i], list[j]);
     std::vector<std::wstring> order;
     for (auto* e : list) order.push_back(e->st.key);
-    for (auto& k : g_order)  // keep the places of devices that are not shown right now
+    for (auto& k : g_order)  // 今表示されていないデバイスの位置は保つ
         if (std::find(order.begin(), order.end(), k) == order.end()) order.push_back(k);
     g_order = order;
     SaveOrder();
@@ -620,7 +729,7 @@ void MoveEntry(const std::wstring& key, int dir) {
 void ShowMenu() {
     ApplyMenuTheme(g_lightTaskbar);
     HMENU m = CreatePopupMenu();
-    std::vector<std::wstring> keys;  // device index -> device key; menu id ID_DEVICE_FIRST + index * DEV_STRIDE + command
+    std::vector<std::wstring> keys;  // デバイスの番号 -> デバイスのキー。メニュー ID は ID_DEVICE_FIRST + 番号 * DEV_STRIDE + コマンド
     std::vector<TrayEntry*> all = OrderedEntries(false), shown = OrderedEntries(true);
     if (all.empty()) AppendMenuW(m, MF_STRING | MF_GRAYED, 0, T(L"No devices with battery info found"));
     else AppendMenuW(m, MF_STRING | MF_GRAYED, 0, T(L"Point at a device to show, hide or move it"));
@@ -648,7 +757,7 @@ void ShowMenu() {
     UINT bgFlags = MF_STRING | (g_widgetBackground ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED);
     AppendMenuW(m, bgFlags, ID_WIDGET_BACKGROUND, T(L"Background behind taskbar text (for transparent taskbars)"));
     AppendMenuW(m, MF_STRING | (g_stacked ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED), ID_STACKED, T(L"Icons above percentages (narrower)"));
-    // With more than one monitor: choose which taskbars show the widget (all, main only, or one monitor).
+    // モニターが 2 台以上のとき: ウィジェットを表示するタスクバーを選ぶ（すべて、メインだけ、または 1 台）。
     auto monitors = widget::OtherMonitors();
     if (monitors.size() > 31) monitors.resize(31);
     if (!monitors.empty()) {
@@ -662,7 +771,7 @@ void ShowMenu() {
             AppendMenuW(sub, f, ID_MONITOR_FIRST + i, TF(L"{monitor} only", { { L"monitor", monitors[i].label } }).c_str());
             if (monitors[i].id == g_widgetMonitor) { checked = ID_MONITOR_FIRST + i; found = true; }
         }
-        if (!found) {  // the chosen monitor is unplugged: the main taskbar shows the widget meanwhile
+        if (!found) {  // 選んだモニターが外されている: その間はメインのタスクバーにウィジェットを表示する
             AppendMenuW(sub, MF_STRING | MF_GRAYED, ID_MONITOR_FIRST + 31, T(L"Chosen monitor (not connected, shown on main)"));
             checked = ID_MONITOR_FIRST + 31;
         }
@@ -670,9 +779,34 @@ void ShowMenu() {
         AppendMenuW(m, MF_POPUP | (g_wantWidget ? 0 : MF_GRAYED), (UINT_PTR)sub, T(L"Show the widget on"));
     }
     AppendMenuW(m, MF_STRING | (g_brandColors ? MF_CHECKED : 0), ID_BRAND_COLORS, T(L"Brand colors (Razer green, Logitech blue, ...)"));
+    AppendMenuW(m, MF_STRING | (g_splitBuds ? MF_CHECKED : 0), ID_SPLIT_BUDS, T(L"Show left and right earbuds separately"));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    // Language: automatic, every built-in or user-added language (in its own name), and a way to add one.
-    i18n::Init();  // picks up language files added since the last time
+    // 通知: バッテリー低下のしきい値と、充電中のデバイスが十分に充電されたときの通知。
+    {
+        HMENU sub = CreatePopupMenu();
+        UINT checked = 0;
+        for (UINT i = 0; i < ARRAYSIZE(LOW_BATTERY_CHOICES); i++) {
+            AppendMenuW(sub, MF_STRING, ID_LOW_FIRST + i, TF(L"At {percent}% or less", { { L"percent", std::to_wstring(LOW_BATTERY_CHOICES[i]) } }).c_str());
+            if (LOW_BATTERY_CHOICES[i] == g_lowBattery) checked = ID_LOW_FIRST + i;
+        }
+        if (checked) CheckMenuRadioItem(sub, ID_LOW_FIRST, ID_LOW_FIRST + ARRAYSIZE(LOW_BATTERY_CHOICES) - 1, checked, MF_BYCOMMAND);
+        AppendMenuW(m, MF_POPUP, (UINT_PTR)sub, T(L"Low battery warning"));
+    }
+    {
+        HMENU sub = CreatePopupMenu();
+        AppendMenuW(sub, MF_STRING, ID_CHARGED_OFF, T(L"Off"));
+        AppendMenuW(sub, MF_SEPARATOR, 0, nullptr);
+        UINT checked = g_chargedNotify <= 0 ? ID_CHARGED_OFF : 0;
+        for (UINT i = 0; i < ARRAYSIZE(CHARGED_NOTIFY_CHOICES); i++) {
+            AppendMenuW(sub, MF_STRING, ID_CHARGED_FIRST + i, TF(L"At {percent}%", { { L"percent", std::to_wstring(CHARGED_NOTIFY_CHOICES[i]) } }).c_str());
+            if (CHARGED_NOTIFY_CHOICES[i] == g_chargedNotify) checked = ID_CHARGED_FIRST + i;
+        }
+        if (checked) CheckMenuRadioItem(sub, ID_CHARGED_OFF, ID_CHARGED_FIRST + ARRAYSIZE(CHARGED_NOTIFY_CHOICES) - 1, checked, MF_BYCOMMAND);
+        AppendMenuW(m, MF_POPUP, (UINT_PTR)sub, T(L"Notify when charged"));
+    }
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    // 言語: 自動、組み込みまたはユーザーが追加したすべての言語（その言語自身の名前で表示）、言語を追加する項目。
+    i18n::Init();  // 前回以降に追加された言語ファイルを読み込む
     auto languages = i18n::Available();
     if (languages.size() > 64) languages.resize(64);
     {
@@ -713,13 +847,19 @@ void ShowMenu() {
         case ID_MONITOR_MAIN: SetWidgetMonitor(L"main"); break;
         case ID_BRAND_COLORS: SetBrandColors(!g_brandColors); break;
         case ID_STACKED: SetStacked(!g_stacked); break;
+        case ID_SPLIT_BUDS: SetSplitBuds(!g_splitBuds); break;
+        case ID_CHARGED_OFF: SetChargedNotify(0); break;
         case ID_MODE_WIDGET: SetMode(true); break;
         case ID_MODE_TRAY: SetMode(false); break;
         case ID_SUPPORT: ShellExecuteW(nullptr, L"open", L"https://github.com/sponsors/krisgfx9", nullptr, nullptr, SW_SHOWNORMAL); break;
         case ID_REPORT: report::Show(g_inst, g_hwnd); break;
         case ID_EXIT: DestroyWindow(g_hwnd); break;
         default:
-            if (cmd >= ID_LANG_FIRST && cmd < ID_LANG_FIRST + languages.size()) {
+            if (cmd >= ID_LOW_FIRST && cmd < ID_LOW_FIRST + ARRAYSIZE(LOW_BATTERY_CHOICES)) {
+                SetLowBattery(LOW_BATTERY_CHOICES[cmd - ID_LOW_FIRST]);
+            } else if (cmd >= ID_CHARGED_FIRST && cmd < ID_CHARGED_FIRST + ARRAYSIZE(CHARGED_NOTIFY_CHOICES)) {
+                SetChargedNotify(CHARGED_NOTIFY_CHOICES[cmd - ID_CHARGED_FIRST]);
+            } else if (cmd >= ID_LANG_FIRST && cmd < ID_LANG_FIRST + languages.size()) {
                 SetLanguage(languages[cmd - ID_LANG_FIRST].code);
             } else if (cmd >= ID_MONITOR_FIRST && cmd < ID_MONITOR_FIRST + monitors.size()) {
                 SetWidgetMonitor(monitors[cmd - ID_MONITOR_FIRST].id);
@@ -734,11 +874,11 @@ void ShowMenu() {
     }
 }
 
-// ---- worker thread ----------------------------------------------------------------------------
+// ---- ワーカースレッド ----------------------------------------------------------------------------
 
-// `--demo`: one sample device of every brand instead of real ones, for screenshots and for checking the
-// brand colors without owning the hardware. Keys, vendor ids and names are mixed on purpose, so every way
-// of recognising a brand gets used.
+// `--demo`: 実際のデバイスの代わりに全ブランドのサンプルを 1 台ずつ表示する。スクリーンショット用や、
+// 実機がなくてもブランドカラーを確認するために使う。キー、ベンダー ID、名前はわざと混ぜてあり、
+// ブランドを判定するすべての方法が使われるようにしている。
 bool g_demo = false;
 
 std::vector<DeviceStatus> DemoDevices() {
@@ -774,7 +914,7 @@ std::vector<DeviceStatus> DemoDevices() {
 }
 
 DWORD WINAPI Worker(LPVOID) {
-    // At sign-in a USB receiver may enumerate before its wireless link is ready.
+    // サインイン直後は、USB レシーバーが認識されてもワイヤレス接続の準備がまだのことがある。
     constexpr DWORD startupPollDelays[] = { 3000, 7000, 15000 };
     size_t startupPoll = 0;
     HANDLE events[2] = { g_stopEvt, g_refreshEvt };
@@ -790,9 +930,11 @@ DWORD WINAPI Worker(LPVOID) {
 void RefreshSoon(UINT ms) { SetTimer(g_hwnd, TIMER_DEBOUNCE, ms, nullptr); }
 
 LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg == g_taskbarCreatedMsg && msg != 0) {  // Explorer restarted
+    if (msg == g_taskbarCreatedMsg && msg != 0) {  // エクスプローラーが再起動した
         widget::Destroy();
         g_useWidget = false;
+        g_notifyIcon = false;  // 古いタスクバーと一緒に消えている
+        KillTimer(h, TIMER_NOTIFY_ICON);
         ReAddAll();
         Reconcile();
         return 0;
@@ -814,7 +956,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_WIDGET_CLICK:
             ShowMenu();
             return 0;
-        case WM_ENDSESSION:  // sign-out / shutdown / installer restart manager
+        case WM_ENDSESSION:  // サインアウト / シャットダウン / インストーラーの再起動マネージャー
             if (wp) DestroyWindow(h);
             return 0;
         case WM_DEVICECHANGE:
@@ -826,6 +968,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_TIMER:
             if (wp == TIMER_DEBOUNCE) { KillTimer(h, TIMER_DEBOUNCE); SetEvent(g_refreshEvt); }
             if (wp == TIMER_WIDGET) Reconcile();
+            if (wp == TIMER_NOTIFY_ICON) RemoveNotifyIcon();
             return 0;
         case WM_SETTINGCHANGE:
             if (lp && !lstrcmpW((LPCWSTR)lp, L"ImmersiveColorSet")) {
@@ -843,13 +986,14 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 if (e.icon) DestroyIcon(e.icon);
             }
             if (g_placeholder) TrayDelete(PLACEHOLDER_ID);
+            RemoveNotifyIcon();
             PostQuitMessage(0);
             return 0;
     }
     return DefWindowProcW(h, msg, wp, lp);
 }
 
-// `WirelessBattery.exe --list` prints what it finds, `--dump` every HID collection.
+// `WirelessBattery.exe --list` は見つけたものを出力し、`--dump` はすべての HID コレクションを出力する。
 int ListToConsole(bool dump) {
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     if (!out || out == INVALID_HANDLE_VALUE) {
@@ -863,8 +1007,8 @@ int ListToConsole(bool dump) {
         WriteFile(out, u.data(), (DWORD)u.size(), &w, nullptr);
     };
     if (dump) {
-        // Also saved to a file: PowerShell does not wait for this windowed exe, so console output can end up
-        // after the prompt or get lost, and a double-click has no console at all.
+        // ファイルにも保存する: PowerShell はこのウィンドウアプリの終了を待たないので、コンソール出力がプロンプトの後ろに
+        // 出たり消えたりすることがあり、ダブルクリックで起動した場合はそもそもコンソールがないため。
         std::wstring text = DumpHidCollections();
         wchar_t path[MAX_PATH] = {};
         GetTempPathW(MAX_PATH, path);
@@ -874,7 +1018,7 @@ int ListToConsole(bool dump) {
             std::wstring crlf;
             for (wchar_t ch : text) crlf += ch == L'\n' ? std::wstring(L"\r\n") : std::wstring(1, ch);
             int n = WideCharToMultiByte(CP_UTF8, 0, crlf.c_str(), (int)crlf.size(), nullptr, 0, nullptr, nullptr);
-            std::string u = "\xEF\xBB\xBF" + std::string(n, 0);  // UTF-8 byte order mark, so Notepad shows it right
+            std::string u = "\xEF\xBB\xBF" + std::string(n, 0);  // UTF-8 の BOM。メモ帳で正しく表示されるように
             WideCharToMultiByte(CP_UTF8, 0, crlf.c_str(), (int)crlf.size(), u.data() + 3, n, nullptr, nullptr);
             DWORD w;
             WriteFile(f, u.data(), (DWORD)u.size(), &w, nullptr);
@@ -884,7 +1028,7 @@ int ListToConsole(bool dump) {
             write(text);
             write(std::wstring(L"\nAlso saved to ") + path + L"\n");
         } else {
-            ShellExecuteW(nullptr, L"open", path, nullptr, nullptr, SW_SHOWNORMAL);  // no console: show the file
+            ShellExecuteW(nullptr, L"open", path, nullptr, nullptr, SW_SHOWNORMAL);  // コンソールがない: ファイルを開いて見せる
         }
         return 0;
     }
@@ -912,7 +1056,7 @@ int ListToConsole(bool dump) {
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     if (cmdLine && wcsstr(cmdLine, L"--list")) return ListToConsole(false);
     if (cmdLine && wcsstr(cmdLine, L"--dump")) return ListToConsole(true);
-    if (cmdLine && wcsstr(cmdLine, L"--report")) {  // the "Request support for a device" window on its own
+    if (cmdLine && wcsstr(cmdLine, L"--report")) {  // 「デバイスのサポートをリクエスト」ウィンドウだけを開く
         i18n::Init();
         report::Show(inst, nullptr);
         MSG msg;
@@ -923,7 +1067,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
         }
         return 0;
     }
-    if (cmdLine && wcsstr(cmdLine, L"--quit")) {  // used by the installer before upgrading/uninstalling
+    if (cmdLine && wcsstr(cmdLine, L"--quit")) {  // インストーラーがアップグレードやアンインストールの前に使う
         if (HWND w = FindWindowW(L"WirelessBatteryWnd", nullptr)) {
             PostMessageW(w, WM_CLOSE, 0, 0);
             for (int i = 0; i < 50 && FindWindowW(L"WirelessBatteryWnd", nullptr); i++) Sleep(100);
@@ -945,7 +1089,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     wc.hInstance = inst;
     wc.lpszClassName = L"WirelessBatteryWnd";
     RegisterClassExW(&wc);
-    // A hidden top-level window (not message-only) so it receives the TaskbarCreated broadcast.
+    // TaskbarCreated のブロードキャストを受け取れるよう、（メッセージ専用ではない）非表示のトップレベルウィンドウにする。
     g_hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, kAppName, WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, inst, nullptr);
     if (!g_hwnd) return 1;
 
@@ -961,15 +1105,18 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     g_widgetBackground = LoadWidgetBackground();
     g_brandColors = LoadBrandColors();
     g_stacked = LoadStacked();
+    g_splitBuds = LoadSplitBuds();
+    g_lowBattery = LoadLowBattery();
+    g_chargedNotify = LoadChargedNotify();
     widget::SetStacked(g_stacked);
-    widget::SetBackground(g_widgetBackground);  // remembered by the widget across re-creation
+    widget::SetBackground(g_widgetBackground);  // ウィジェットを作り直しても保持される
     i18n::Init();
     g_widgetMonitor = LoadWidgetMonitor();
     widget::SetMonitorChoice(g_widgetMonitor);
     LoadHidden();
     LoadOrder();
     Reconcile();
-    UpdatePlaceholder();  // something to click on until the first poll finishes
+    UpdatePlaceholder();  // 最初のポーリングが終わるまでのクリック用
     SetTimer(g_hwnd, TIMER_WIDGET, 1000, nullptr);
     g_worker = CreateThread(nullptr, 0, Worker, nullptr, 0, nullptr);
 
@@ -979,7 +1126,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
         TranslateMessage(&m);
         DispatchMessageW(&m);
     }
-    // drain results posted after shutdown started
+    // 終了処理の開始後に届いた結果を処理しきる
     while (PeekMessageW(&m, nullptr, WM_RESULTS, WM_RESULTS, PM_REMOVE)) delete reinterpret_cast<std::vector<DeviceStatus>*>(m.lParam);
     if (notify) UnregisterDeviceNotification(notify);
     if (g_worker) CloseHandle(g_worker);

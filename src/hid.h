@@ -1,18 +1,18 @@
 #pragma once
-// Thin Win32 HID layer shared by all drivers.
+// すべてのドライバーで共有する、薄い Win32 HID レイヤー。
 //
-// Report buffers follow hidapi conventions so protocol code from other projects maps 1:1:
-//  * Write/SetFeature: data[0] is the report ID (0 when the device does not number its reports);
-//    the buffer is zero-padded to the report length.
-//  * Read: a leading 0 report ID is stripped, so data[0] is the first payload byte for
-//    unnumbered reports and the report ID for numbered ones.
+// レポートバッファーは hidapi の約束事に従うので、他プロジェクトのプロトコルのコードをそのまま当てはめられる:
+//  * Write/SetFeature: data[0] はレポート ID（デバイスがレポートに番号を付けない場合は 0）。
+//    バッファーはレポート長までゼロで埋める。
+//  * Read: 先頭のレポート ID が 0 なら取り除くので、番号なしのレポートでは data[0] がペイロードの
+//    最初のバイト、番号付きのレポートではレポート ID になる。
 #include "platform_compat.h"
 
 #ifdef _WIN32
 #include <hidsdi.h>
 #include <hidpi.h>
 #else
-// Only the fields used by HidColl's accessors are needed by the portable drivers.
+// ポータブルなドライバーが必要とするのは、HidColl のアクセサーが使うフィールドだけ。
 struct HIDP_CAPS {
     USHORT UsagePage = 0, Usage = 0;
     USHORT InputReportByteLength = 0;
@@ -29,9 +29,9 @@ struct HIDP_CAPS {
 
 struct HidColl {
     std::wstring path;
-    std::wstring product;  // filled by the Linux backend from sysfs; unused on Windows
+    std::wstring product;  // Linux バックエンドが sysfs から設定する。Windows では使わない
     USHORT vid = 0, pid = 0;
-    int iface = -1;  // USB interface number (MI_xx in the path), -1 when unknown
+    int iface = -1;  // USB のインターフェース番号（パス中の MI_xx）。不明なら -1
     HIDP_CAPS caps{};
     USHORT page() const { return caps.UsagePage; }
     USHORT usage() const { return caps.Usage; }
@@ -49,9 +49,9 @@ public:
     HidDev(const HidDev&) = delete;
     HidDev& operator=(const HidDev&) = delete;
 
-    bool Open(const HidColl& c);            // read/write, overlapped
-    bool OpenReadOnly(const HidColl& c);    // read only, overlapped: for push-only collections another app may hold
-    bool OpenFeatureOnly(const HidColl& c);  // zero access: enough for feature reports, works on mice/keyboards
+    bool Open(const HidColl& c);            // 読み書き、オーバーラップ I/O
+    bool OpenReadOnly(const HidColl& c);    // 読み取り専用、オーバーラップ I/O: 他のアプリが握っているかもしれない、プッシュ専用のコレクション用
+    bool OpenFeatureOnly(const HidColl& c);  // アクセス権なし: フィーチャーレポートには十分で、マウスやキーボードでも使える
     void Close();
 #ifdef _WIN32
     bool ok() const { return h_ != INVALID_HANDLE_VALUE; }
@@ -62,17 +62,17 @@ public:
 
     bool Write(const std::vector<BYTE>& data, int timeoutMs = 500);
     bool Write(std::initializer_list<BYTE> data, int timeoutMs = 500) { return Write(std::vector<BYTE>(data), timeoutMs); }
-    // Reads one input report into `buf` (resized to fit). Returns the byte count, or -1 on timeout/error.
+    // 入力レポートを 1 つ `buf` に読み込む（サイズは合わせて変更）。バイト数を返し、タイムアウトやエラーなら -1。
     int Read(std::vector<BYTE>& buf, int timeoutMs);
-    // For collections without an interrupt OUT pipe (WriteFile fails there): arms a read, sends
-    // `data` with HidD_SetOutputReport, and returns the first input report like Read() does.
+    // インターラプト OUT パイプがないコレクション用（そこでは WriteFile が失敗する）: 読み取りを開始してから
+    // `data` を HidD_SetOutputReport で送り、Read() と同じように最初の入力レポートを返す。
     int SetOutputAndRead(const std::vector<BYTE>& data, std::vector<BYTE>& buf, int timeoutMs);
-    void Flush();  // discard queued input reports
+    void Flush();  // たまっている入力レポートを捨てる
 
     bool SetFeature(const std::vector<BYTE>& data);
-    bool GetFeature(BYTE reportId, std::vector<BYTE>& out);  // out[0] = report ID
-    bool GetFeatureByte(BYTE reportId, BYTE& value);  // numbered 2-byte report on a read handle
-    bool GetInputReport(BYTE reportId, std::vector<BYTE>& out);  // current input report via the control pipe; out[0] = report ID
+    bool GetFeature(BYTE reportId, std::vector<BYTE>& out);  // out[0] = レポート ID
+    bool GetFeatureByte(BYTE reportId, BYTE& value);  // 読み取りハンドルで、番号付きの 2 バイトのレポート
+    bool GetInputReport(BYTE reportId, std::vector<BYTE>& out);  // コントロールパイプ経由で現在の入力レポートを取得。out[0] = レポート ID
 
 private:
 #ifdef _WIN32
@@ -87,9 +87,9 @@ private:
 std::wstring HidProduct(const HidColl& c);
 std::wstring Hex4(USHORT v);
 int Clamp100(int v);
-int MapTo100(int v, int lo, int hi);  // linear map lo..hi -> 0..100, clamped
-// Piecewise-linear interpolation through (mv[i], pct[i]); tables sorted by descending voltage.
+int MapTo100(int v, int lo, int hi);  // lo..hi を 0..100 に線形変換し、範囲内に収める
+// (mv[i], pct[i]) を通る折れ線で補間する。テーブルは電圧の高い順に並べること。
 int Interpolate(int mv, const int* mvTable, const int* pctTable, int n);
 DeviceKind GuessKind(const std::wstring& name);
-// Device type from the top-level collections a device exposes (mouse > gamepad > keyboard).
+// デバイスが公開する最上位コレクションから種類を決める（マウス > ゲームパッド > キーボード）。
 DeviceKind KindFromCollections(const std::vector<HidColl>& all, USHORT vid, USHORT pid);

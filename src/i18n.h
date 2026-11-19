@@ -1,21 +1,21 @@
 #pragma once
-// UI translations from plain text files.
+// テキストファイルによる UI の翻訳。
 //
-// A language is a UTF-8 text file, one phrase per line, English on the left:
-//     @code = tr
-//     @name = Türkçe
-//     Refresh now = Şimdi yenile
-//     {name} is at {percent}% = {name}: %{percent} kaldı
-// Lines starting with # are comments; "\n" in a translation is a line break. Placeholders are named
-// ({name}, {percent}), so a mistake in a translation can never crash the app: at worst a word is wrong.
-// Missing phrases stay English.
+// 1 つの言語は UTF-8 のテキストファイルで、1 行に 1 フレーズ、左側が英語:
+//    @code = tr
+//    @name = Türkçe
+//    Refresh now = Şimdi yenile
+//    {name} is at {percent}% = {name}: %{percent} kaldı
+// # で始まる行はコメント。訳文中の "\n" は改行になる。プレースホルダーには名前が付いている
+// （{name}、{percent}）ので、翻訳を間違えてもアプリが落ちることはない。最悪でも単語がおかしくなるだけ。
+// 訳がないフレーズは英語のまま。
 //
-// Where languages come from:
-//  * the lang\*.txt files of the repository, built into the exe (adding one = adding a file, no code)
-//  * a "lang" folder next to WirelessBattery.exe and %APPDATA%\WirelessBattery\lang: any .txt file there
-//    appears in the Language menu without rebuilding, and one with the same @code as a built-in language
-//    replaces its phrases (to fix a word locally).
-// The --list / --dump output stays English on purpose (it is pasted into GitHub issues).
+// 言語の読み込み元:
+//  * リポジトリの lang\*.txt。exe に組み込まれる（言語の追加 = ファイルの追加。コードの変更は不要）
+//  * WirelessBattery.exe の隣の "lang" フォルダーと %APPDATA%\WirelessBattery\lang: ここに置いた .txt は
+//    ビルドし直さなくても「言語」メニューに出る。組み込みの言語と同じ @code のファイルは、その訳を置き換える
+//    （手元で単語を直したいとき用）。
+// --list / --dump の出力は、あえて英語のままにしている（GitHub の issue に貼り付けるため）。
 #include <initializer_list>
 #include <string>
 #include <utility>
@@ -24,27 +24,27 @@
 namespace i18n {
 
 struct Language {
-    std::wstring code;  // "tr", "pt-BR", ...
-    std::wstring name;  // in the language itself: "Türkçe", "Português (Brasil)"
+    std::wstring code;  // "tr"、"pt-BR" など
+    std::wstring name;  // その言語自身での名前: "Türkçe"、"Português (Brasil)"
 };
 
-// Finds the languages (built-in and user files) and applies the saved choice; call once at startup.
+// 言語（組み込みとユーザーのファイル）を探し、保存された選択を適用する。起動時に 1 回呼ぶ。
 void Init();
-// Every language that can be picked, English first.
+// 選べるすべての言語。先頭は英語。
 std::vector<Language> Available();
-// The saved choice: empty = follow the Windows display language.
+// 保存された選択: 空 = Windows の表示言語に従う。
 std::wstring Choice();
-// Saves the choice ("" = automatic) and switches to it.
+// 選択を保存し（"" = 自動）、その言語に切り替える。
 void SetChoice(const std::wstring& code);
-// True for right-to-left languages (Hebrew, Arabic): menus are laid out from the right.
+// 右から左に書く言語（ヘブライ語、アラビア語）なら true: メニューを右から並べる。
 bool Rtl();
-// Creates %APPDATA%\WirelessBattery\lang with a template of every phrase and opens it in Explorer.
+// %APPDATA%\WirelessBattery\lang を作り、全フレーズのテンプレートを置いてエクスプローラーで開く。
 void OpenUserFolder();
 
 }  // namespace i18n
 
-// The translation of an English UI phrase, or the phrase itself.
+// 英語の UI フレーズの訳。訳がなければフレーズそのもの。
 const wchar_t* T(const wchar_t* en);
 std::wstring T(const std::wstring& en);
-// T() with named placeholders: TF(L"{name} is at {percent}%", { { L"name", n }, { L"percent", L"40" } }).
+// 名前付きプレースホルダー付きの T(): TF(L"{name} is at {percent}%", { { L"name", n }, { L"percent", L"40" } })。
 std::wstring TF(const wchar_t* en, std::initializer_list<std::pair<const wchar_t*, std::wstring>> args);

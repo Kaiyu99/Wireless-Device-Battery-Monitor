@@ -12,9 +12,9 @@ namespace {
 HWND g_wnd, g_taskbar, g_tip, g_notify, g_rebar;
 UINT g_clickMsg;
 bool g_light, g_hover;
-bool g_background;  // opaque rounded plate behind the text, for transparent / restyled taskbars
-bool g_stacked;     // icon above the percentage (menu option, PR #525)
-bool g_vertical;    // the primary taskbar is docked left or right: one block per device, stacked (PR #321)
+bool g_background;  // 文字の後ろの不透明な角丸の背景。透明化 / カスタマイズされたタスクバー向け
+bool g_stacked;     // アイコンをパーセントの上に置く（メニューの設定、PR #525）
+bool g_vertical;    // メインのタスクバーが左右に配置されている: デバイスごとに 1 ブロックを縦に積む（PR #321）
 std::vector<WidgetItem> g_items;
 std::wstring g_tipText;
 RECT g_lastTray{}, g_lastBar{}, g_lastWidgets{};
@@ -22,23 +22,23 @@ int g_lastW = -1, g_lastDpi = 0, g_lastLeft = -1;
 SIZE g_size{};
 HINSTANCE g_inst;
 
-// Copies of the strip on secondary-monitor taskbars (Shell_SecondaryTrayWnd), so the levels stay visible
-// while a game runs fullscreen on the main screen. Same drawing, same click and tooltip; each one sits
-// left of its taskbar's clock. The primary strip above is unchanged, and with one monitor none exist.
+// サブモニターのタスクバー（Shell_SecondaryTrayWnd）に置く帯のコピー。メイン画面でゲームを全画面で動かしている
+// 間も残量が見えるようにするため。描画、クリック、ツールチップは同じで、それぞれのタスクバーの時計の左に置く。
+// 上のメインの帯は変わらず、モニターが 1 台ならコピーは作らない。
 struct Mirror {
     HWND bar = nullptr, wnd = nullptr;
     bool hover = false;
     SIZE size{};
     int dpi = 0;
-    int lastLeft = INT_MIN;  // client x it was last placed at; INT_MIN = not placed (hidden)
+    int lastLeft = INT_MIN;  // 最後に置いたクライアント座標の x。INT_MIN = 未配置（非表示）
 };
 std::vector<Mirror> g_mirrors;
-// Which taskbars show the strip: "all", "main", or one monitor's id (MonitorId), e.g. only monitor 3.
-// With one monitor chosen, the primary strip is hidden; if that monitor is not connected, the primary
-// strip is shown instead so the levels never disappear.
+// 帯を表示するタスクバー: "all"、"main"、またはモニター 1 台の ID（MonitorId）。例: モニター 3 だけ。
+// モニターを 1 台選んだ場合はメインの帯を隠す。そのモニターが接続されていなければ、残量が消えてしまわないよう
+// 代わりにメインの帯を表示する。
 std::wstring g_choice = L"all";
 bool g_primaryHidden = false;
-HWND g_dpiBar;  // while a mirror is painted or placed, Px() uses its taskbar's DPI
+HWND g_dpiBar;  // コピーを描画・配置している間は、Px() がそのタスクバーの DPI を使う
 
 const wchar_t* kClass = L"WirelessBatteryWidget";
 
@@ -49,35 +49,34 @@ int Dpi() {
 }
 int Px(int v) { return MulDiv(v, Dpi(), 96); }
 
-// Windows 11 puts the Widgets (weather) button right next to the tray when the taskbar is
-// left-aligned (start-aligned on right-to-left Windows). It is XAML, so only UI Automation knows
-// where it is. The element is looked up once per taskbar; its rectangle is re-read every few
-// seconds because the weather text changes its width.
+// Windows 11 では、タスクバーが左寄せ（右から左に書く Windows では先頭寄せ）のとき、ウィジェット（天気）
+// ボタンが通知領域のすぐ隣に来る。これは XAML なので、位置は UI Automation でしかわからない。要素の検索は
+// タスクバーごとに 1 回だけ行う。天気の文字で幅が変わるので、矩形は数秒ごとに読み直す。
 //
-// UI Automation calls go to Explorer and wait for its UI thread, while our widget is a child window
-// of the taskbar, so Explorer in turn waits for our UI thread whenever it lays out or sends input to
-// the widget. Making those calls from our UI thread deadlocks both: Explorer is reported hung
-// ("Cross-process", waiting on WirelessBattery.exe) and restarted, again and again. So the lookup
-// runs on its own thread, which owns no windows, and the UI thread only reads the last rectangle.
+// UI Automation の呼び出しはエクスプローラーに届き、その UI スレッドを待つ。一方、このウィジェットはタスクバーの
+// 子ウィンドウなので、エクスプローラーがウィジェットのレイアウトや入力を処理するたびに、逆にこちらの UI スレッドを
+// 待つ。こちらの UI スレッドから呼ぶと両者がデッドロックする: エクスプローラーが応答なし（"Cross-process"、
+// WirelessBattery.exe 待ち）と判定され、何度も再起動される。そのため検索はウィンドウを持たない専用スレッドで
+// 行い、UI スレッドは最後に得た矩形を読むだけにしている。
 SRWLOCK g_wbLock = SRWLOCK_INIT;
-RECT g_wbRect{};             // last Widgets button rectangle (screen), empty when unknown
-HWND g_wbRectBar;            // taskbar g_wbRect was found in (guarded by g_wbLock)
-HWND g_wbTaskbar;            // taskbar to search, null while there is no widget (guarded by g_wbLock)
-HANDLE g_wbWake;             // auto-reset: wakes the lookup thread early
+RECT g_wbRect{};             // 最後に得たウィジェットボタンの矩形（スクリーン座標）。不明なら空
+HWND g_wbRectBar;            // g_wbRect を見つけたタスクバー（g_wbLock で保護）
+HWND g_wbTaskbar;            // 検索するタスクバー。ウィジェットがない間は null（g_wbLock で保護）
+HANDLE g_wbWake;             // 自動リセット: 検索スレッドを早めに起こす
 
-// Where a Windows 11 secondary taskbar's clock and task buttons are. Its XAML has no child windows for
-// them, so the same lookup thread reads them with UI Automation (the clock has AutomationId
-// "SystemTrayIcon", task buttons class "Taskbar.TaskListButtonAutomationPeer"; found by PR #107).
+// Windows 11 のサブタスクバーの時計とタスクボタンの位置。XAML にはこれらの子ウィンドウがないため、同じ検索
+// スレッドが UI Automation で読み取る（時計は AutomationId が "SystemTrayIcon"、タスクボタンはクラスが
+// "Taskbar.TaskListButtonAutomationPeer"。PR #107 で判明）。
 struct Span {
     HWND bar = nullptr;
-    bool measured = false;   // UI Automation answered for this taskbar
-    bool hasClock = false;   // the clock can be turned off on secondary taskbars
-    int clockLeft = 0;       // screen x
+    bool measured = false;   // このタスクバーについて UI Automation が応答した
+    bool hasClock = false;   // サブタスクバーでは時計をオフにできる
+    int clockLeft = 0;       // スクリーン座標の x
     bool hasTasks = false;
-    int tasksRight = 0;      // right edge of the last task button left of the clock (screen x)
+    int tasksRight = 0;      // 時計より左にある最後のタスクボタンの右端（スクリーン座標の x）
 };
-std::vector<Span> g_spans;   // guarded by g_wbLock
-bool g_wbMirrors;            // guarded by g_wbLock: measure secondary taskbars too
+std::vector<Span> g_spans;   // g_wbLock で保護
+bool g_wbMirrors;            // g_wbLock で保護: サブタスクバーも測る
 
 IUIAutomationCondition* StringCondition(IUIAutomation* uia, PROPERTYID prop, const wchar_t* value) {
     VARIANT v;
@@ -102,7 +101,7 @@ Span MeasureSpan(IUIAutomation* uia, HWND bar) {
         IUIAutomationElementArray* all = nullptr;
         int n = 0;
         if (SUCCEEDED(root->FindAll(TreeScope_Descendants, clock, &all)) && all && SUCCEEDED(all->get_Length(&n)))
-            for (int i = 0; i < n; i++) {  // leftmost of the clock area's buttons
+            for (int i = 0; i < n; i++) {  // 時計の領域にあるボタンのうち一番左
                 IUIAutomationElement* el = nullptr;
                 RECT r{};
                 if (SUCCEEDED(all->GetElement(i, &el)) && el && SUCCEEDED(el->get_CurrentBoundingRectangle(&r)) && inBar(r) &&
@@ -146,7 +145,7 @@ DWORD WINAPI WidgetsButtonThread(LPVOID) {
     IUIAutomationElement* btn = nullptr;
     HWND btnBar = nullptr;
     for (;;) {
-        WaitForSingleObject(g_wbWake, btnBar ? 5000 : INFINITE);  // no widget (tray-icon mode): sleep until one
+        WaitForSingleObject(g_wbWake, btnBar ? 5000 : INFINITE);  // ウィジェットがない（トレイアイコン表示）: できるまで待機する
         AcquireSRWLockShared(&g_wbLock);
         HWND bar = g_wbTaskbar;
         ReleaseSRWLockShared(&g_wbLock);
@@ -171,7 +170,7 @@ DWORD WINAPI WidgetsButtonThread(LPVOID) {
                 if (root) root->Release();
             }
             if (btn && FAILED(btn->get_CurrentBoundingRectangle(&r))) {
-                btn->Release();  // stale (Widgets turned off, Explorer restarted): look it up again next time
+                btn->Release();  // 古い（ウィジェットがオフにされた、エクスプローラーが再起動した）: 次回もう一度探す
                 btn = nullptr;
                 r = {};
             }
@@ -183,9 +182,9 @@ DWORD WINAPI WidgetsButtonThread(LPVOID) {
         if (bar && mirrors && uia)
             for (HWND t = FindWindowExW(nullptr, nullptr, L"Shell_SecondaryTrayWnd", nullptr); t;
                  t = FindWindowExW(nullptr, t, L"Shell_SecondaryTrayWnd", nullptr))
-                if (IsXamlTaskbar(t)) spans.push_back(MeasureSpan(uia, t));  // Windows 10 bars have real child windows
+                if (IsXamlTaskbar(t)) spans.push_back(MeasureSpan(uia, t));  // Windows 10 のバーには本物の子ウィンドウがある
         AcquireSRWLockExclusive(&g_wbLock);
-        if (bar && g_wbTaskbar == bar) {  // drop a result for a taskbar we no longer sit on
+        if (bar && g_wbTaskbar == bar) {  // もう取り付けていないタスクバーの結果は捨てる
             g_wbRect = r;
             g_wbRectBar = bar;
         }
@@ -194,9 +193,9 @@ DWORD WINAPI WidgetsButtonThread(LPVOID) {
     }
 }
 
-// Points the lookup thread at `taskbar` (null to idle it), starting the thread on first use.
-// The last rectangle is kept for its taskbar, so switching from tray-icon back to taskbar mode on the
-// same taskbar steps past the Widgets button straight away instead of after the next lookup.
+// 検索スレッドに `taskbar` を対象にさせる（null なら待機させる）。初回はスレッドを起動する。
+// 最後の矩形はそのタスクバーの分として残しておくので、同じタスクバーでトレイアイコン表示からタスクバー表示に戻したとき、
+// 次の検索を待たずにすぐウィジェットボタンを避けられる。
 void WatchWidgetsButton(HWND taskbar) {
     AcquireSRWLockExclusive(&g_wbLock);
     g_wbTaskbar = taskbar;
@@ -209,7 +208,7 @@ void WatchWidgetsButton(HWND taskbar) {
     if (g_wbWake) SetEvent(g_wbWake);
 }
 
-// Never blocks: returns what the lookup thread last found on the current taskbar.
+// ブロックしない: 検索スレッドが現在のタスクバーで最後に見つけたものを返す。
 RECT WidgetsButtonRect() {
     AcquireSRWLockShared(&g_wbLock);
     RECT r = g_wbRectBar && g_wbRectBar == g_wbTaskbar ? g_wbRect : RECT{};
@@ -235,13 +234,13 @@ wchar_t Glyph(DeviceKind k, bool bluetooth) {
         case DeviceKind::Keyboard: return 0xE765;  // KeyboardClassic
         case DeviceKind::Gamepad:  return 0xE7FC;  // Game
         case DeviceKind::Phone:    return 0xE8EA;  // CellPhone
-        default:                   return bluetooth ? 0xE702 : 0xE772;  // Bluetooth / Devices
+        default:                   return bluetooth ? 0xE702 : 0xE772;  // Bluetooth / デバイス
     }
 }
 constexpr wchar_t kBolt = 0xE945;            // LightningBolt
-constexpr wchar_t kBatteryUnknown = 0xE996;  // shown when there is nothing to display
+constexpr wchar_t kBatteryUnknown = 0xE996;  // 表示するものが何もないときに出す
 
-// Creates a font, falling back when the preferred face is not installed (GDI would silently substitute).
+// フォントを作る。希望の書体が入っていなければ代わりのものにする（GDI は黙って置き換えてしまうため）。
 HFONT MakeFont(int px, int weight, const wchar_t* face, const wchar_t* fallback, int fallbackPx = 0) {
     for (const wchar_t* f : { face, fallback }) {
         int h_px = (f == fallback && fallbackPx > 0) ? fallbackPx : px;
@@ -259,7 +258,7 @@ HFONT MakeFont(int px, int weight, const wchar_t* face, const wchar_t* fallback,
     return nullptr;
 }
 
-// Grayscale coverage mask of a string, cropped to its ink bounds.
+// 文字列のグレースケールの被覆マスク。インクのある範囲で切り抜く。
 struct Mask {
     int w = 0, h = 0;
     std::vector<BYTE> a;
@@ -305,13 +304,72 @@ Mask RenderMask(const std::wstring& s, HFONT font, bool darkOnLight) {
     return m;
 }
 
+// イヤホンの充電ケースのアイコン（Segoe のアイコンフォントには絵柄がない）。少し横長の角丸の輪郭、フタの合わせ目、
+// 前面の LED を、4 倍の解像度で描いてから縮小し、フォントのグリフと同じようになめらかな縁にする。
+// `refH` は並べるアイコン（ヘッドホンのグリフ）の高さ。線の太さもそれに合わせる。
+Mask CaseMask(int refH) {
+    const int S = 4;
+    int w = std::max(10, (refH * 5 + 2) / 4), h = std::max(8, refH);  // 幅 1.25 倍、高さは同じ（中が空いている分、小さく見えないように）
+    int corner = std::max(2, h * S * 4 / 5);  // 角の丸み（楕円の直径）。高さの 0.8 倍: カプセル形ではなく角丸の箱
+    int W = w * S, H = h * S;
+    int stroke = std::max(S, (refH * S + 5) / 11);
+    HDC dc = CreateCompatibleDC(nullptr);
+    BITMAPINFO bi{};
+    bi.bmiHeader = { sizeof(BITMAPINFOHEADER), W, -H, 1, 32, BI_RGB };
+    void* bits = nullptr;
+    HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    HGDIOBJ ob = SelectObject(dc, bmp);
+    memset(bits, 0, (size_t)W * H * 4);
+    HBRUSH white = CreateSolidBrush(RGB(255, 255, 255));
+    HPEN pen = CreatePen(PS_INSIDEFRAME, stroke, RGB(255, 255, 255));
+    // フタの合わせ目: 輪郭の内側だけに引く
+    HRGN inside = CreateRoundRectRgn(0, 0, W + 1, H + 1, corner, corner);
+    SelectClipRgn(dc, inside);
+    int seam = H * 40 / 100 - stroke / 2;
+    RECT line{ 0, seam, W, seam + stroke };
+    FillRect(dc, &line, white);
+    SelectClipRgn(dc, nullptr);
+    DeleteObject(inside);
+    // 輪郭
+    HGDIOBJ op = SelectObject(dc, pen);
+    HGDIOBJ obr = SelectObject(dc, GetStockObject(NULL_BRUSH));
+    RoundRect(dc, 0, 0, W, H, corner, corner);
+    // 前面の LED
+    int led = std::max(S, stroke * 11 / 10), cx = W / 2, cy = H * 68 / 100;
+    SelectObject(dc, GetStockObject(NULL_PEN));
+    SelectObject(dc, white);
+    Ellipse(dc, cx - led, cy - led, cx + led + 1, cy + led + 1);
+    SelectObject(dc, obr);
+    SelectObject(dc, op);
+    GdiFlush();
+    // S×S のブロックごとに平均して縮小する
+    Mask m;
+    m.w = w;
+    m.h = h;
+    m.a.resize((size_t)w * h);
+    auto* p = static_cast<DWORD*>(bits);
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            int sum = 0;
+            for (int j = 0; j < S; j++)
+                for (int i = 0; i < S; i++) sum += p[(y * S + j) * W + x * S + i] & 0xFF;
+            m.a[y * w + x] = (BYTE)(sum / (S * S));
+        }
+    DeleteObject(pen);
+    DeleteObject(white);
+    SelectObject(dc, ob);
+    DeleteObject(bmp);
+    DeleteDC(dc);
+    return m;
+}
+
 struct Rgb { int r, g, b; };
 
 struct Canvas {
     int w, h;
-    std::vector<DWORD> px;  // premultiplied BGRA
+    std::vector<DWORD> px;  // 乗算済みの BGRA
     Canvas(int w_, int h_) : w(w_), h(h_), px((size_t)w_ * h_, 0) {}
-    void Blend(int x, int y, Rgb c, int a) {  // source-over, a = 0..255
+    void Blend(int x, int y, Rgb c, int a) {  // ソースオーバー合成、a = 0..255
         if (x < 0 || y < 0 || x >= w || y >= h || a <= 0) return;
         DWORD d = px[y * w + x];
         int inv = 255 - a;
@@ -328,8 +386,8 @@ struct Canvas {
     }
 };
 
-// Soft glow around a glyph, like a lit RGB device: the coverage mask padded by r pixels, box-blurred
-// twice and brightened so a thin icon outline still gives a visible glow.
+// 光る RGB デバイスのような、グリフのまわりのやわらかな光彩: 被覆マスクを r ピクセル広げ、ボックスぼかしを
+// 2 回かけてから明るくする。細いアイコンの輪郭でも光彩がはっきり見えるようにするため。
 Mask Halo(const Mask& m, int r) {
     Mask g;
     g.w = m.w + 2 * r;
@@ -357,9 +415,9 @@ Mask Halo(const Mask& m, int r) {
     return g;
 }
 
-// One drawn piece of the strip. Normal pieces follow each other from left to right. A piece with an
-// `anchor` (index of an earlier piece) is a caption: drawn over that piece, `bx`/`by` from its top-left
-// corner, and taking no room of its own. Branded devices add a glow behind the glyph and a level bar.
+// 帯に描く部品 1 つ。通常の部品は左から右へ順に並ぶ。`anchor`（前の部品の番号）を持つ部品はキャプションで、
+// その部品の上に重ねて描き、`bx`/`by` はその左上の角からの位置で、自分の場所は取らない。ブランドのデバイスは
+// グリフの後ろに光彩と、残量バーを追加する。
 struct Piece {
     Mask m;
     Rgb color;
@@ -367,19 +425,19 @@ struct Piece {
     int gapAfter;
     int anchor = -1;
     int bx = 0, by = 0;
-    int barPct = -1;  // >= 0: thin level bar under the text (branded devices)
+    int barPct = -1;  // >= 0: 文字の下の細い残量バー（ブランドのデバイス）
     Rgb barColor{};
-    Mask halo;        // glow drawn behind the glyph (branded devices)
+    Mask halo;        // グリフの後ろに描く光彩（ブランドのデバイス）
     int haloR = 0, haloAlpha = 0;
-    int px = INT_MIN, py = 0;  // fixed top-left position (stacked and vertical layouts); INT_MIN = flow left to right
+    int px = INT_MIN, py = 0;  // 固定の左上位置（積み重ね・縦のレイアウト）。INT_MIN = 左から右へ順に並べる
 };
 
-// Three arrangements of the same pieces:
-//  * normal: "[icon] 30%  [icon] 93%" in one row (unchanged default)
-//  * stacked (menu option, from PR #525): each device's icon above its percentage, to save width;
-//    used only when the taskbar is tall enough, otherwise the normal row
-//  * vertical (left / right taskbar, from PR #321): one device per row block, stacked top to bottom
-// `width` and `height` return the strip's size; in the vertical layout the width is the bar's.
+// 同じ部品の 3 通りの並べ方:
+//  * 通常: "[アイコン] 30%  [アイコン] 93%" を 1 行に並べる（既定のまま）
+//  * 積み重ね（メニューの設定、PR #525 から）: 幅を節約するため、各デバイスのアイコンをパーセントの上に置く。
+//    タスクバーに十分な高さがあるときだけ使い、そうでなければ通常の 1 行にする
+//  * 縦（左右のタスクバー、PR #321 から）: デバイスごとに 1 ブロックを上から下へ積む
+// `width` と `height` は帯のサイズを返す。縦のレイアウトでは幅はバーの幅になる。
 std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
     Rgb fg = g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 };
     Rgb red = g_light ? Rgb{ 196, 30, 40 } : Rgb{ 255, 90, 90 };
@@ -387,10 +445,10 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
     HFONT icons = MakeFont(Px(16), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
     HFONT bolt = MakeFont(Px(11), FW_NORMAL, L"Segoe Fluent Icons", L"Segoe MDL2 Assets");
     HFONT text = MakeFont(Px(13), FW_NORMAL, L"Segoe UI Variable Text", L"Segoe UI", Px(12));
-    HFONT caption = MakeFont(std::max(8, Px(7)), FW_SEMIBOLD, L"Segoe UI Variable Text", L"Segoe UI");  // never under 8 px
+    HFONT caption = MakeFont(std::max(8, Px(7)), FW_SEMIBOLD, L"Segoe UI Variable Text", L"Segoe UI");  // 8 px を下回らない
 
     std::vector<Piece> out;
-    struct Slot { int icon, label, bolt; };  // indices of one device's pieces
+    struct Slot { int icon, label, bolt; };  // 1 台のデバイスの部品の番号
     std::vector<Slot> slots;
     if (g_items.empty()) out.push_back({ RenderMask(std::wstring(1, kBatteryUnknown), icons, g_light), fg, 110, 0 });
     for (size_t i = 0; i < g_items.size(); i++) {
@@ -402,7 +460,10 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
         bool branded = it.accent != Accent::None;
         BrandColor bc = AccentColor(it.accent, g_light);
         Rgb accent{ bc.r, bc.g, bc.b };
-        Piece icon{ RenderMask(std::wstring(1, Glyph(it.kind, it.bluetooth)), icons, g_light), branded ? accent : fg, a, Px(5) };
+        Mask iconMask = it.chargingCase
+            ? CaseMask(RenderMask(std::wstring(1, Glyph(DeviceKind::Headset, false)), icons, g_light).h)
+            : RenderMask(std::wstring(1, Glyph(it.kind, it.bluetooth)), icons, g_light);
+        Piece icon{ std::move(iconMask), branded ? accent : fg, a, Px(5) };
         if (branded && !it.dim) {
             icon.haloR = Px(3);
             icon.halo = Halo(icon.m, icon.haloR);
@@ -418,7 +479,7 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
         out.push_back(std::move(label));
         if (it.charging) out.push_back({ RenderMask(std::wstring(1, kBolt), bolt, g_light), charge, a, 0 });
         out.back().gapAfter = i + 1 < g_items.size() ? Px(14) : 0;
-        if (!it.label.empty()) {  // tiny caption in the bottom-right corner of the icon
+        if (!it.label.empty()) {  // アイコンの右下の角に付ける小さなキャプション
             Piece c{ RenderMask(it.label, caption, g_light), fg, a, 0 };
             c.anchor = (int)glyph;
             c.bx = out[glyph].m.w - c.m.w + Px(3);
@@ -432,7 +493,7 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
     DeleteObject(caption);
 
     height = barH;
-    const int rowGap = Px(2), barRoom = Px(5);  // barRoom: space for a brand level bar under the text
+    const int rowGap = Px(2), barRoom = Px(5);  // barRoom: 文字の下にブランドの残量バーを置くスペース
     int iconH = 0, textH = 0;
     for (const Slot& s : slots) {
         iconH = std::max(iconH, out[s.icon].m.h);
@@ -440,7 +501,7 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
     }
     bool stacked = !g_vertical && g_stacked && !slots.empty() && barH >= iconH + rowGap + textH + barRoom + Px(6);
     if (g_vertical && !slots.empty()) {
-        // One block per device, centred in the bar's width: icon, then the percentage (and bolt) under it.
+        // デバイスごとに 1 ブロックを、バーの幅の中央に置く: アイコン、その下にパーセント（と稲妻）。
         width = barW;
         int y = Px(6);
         for (const Slot& s : slots) {
@@ -462,7 +523,7 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
         return out;
     }
     if (stacked) {
-        // Icon on top (bolt to its right), percentage centred under it; the pair centred in the bar's height.
+        // アイコンが上（稲妻はその右）、パーセントはその下の中央。この組をバーの高さの中央に置く。
         int top = (barH - (iconH + rowGap + textH + barRoom)) / 2;
         int x = Px(8);
         for (const Slot& s : slots) {
@@ -489,7 +550,7 @@ std::vector<Piece> Layout(int barW, int barH, int& width, int& height) {
     return out;
 }
 
-// Draws the strip for one window: the primary one or a mirror on a secondary taskbar.
+// 1 つのウィンドウに帯を描く: メインのもの、またはサブタスクバーのコピー。
 void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
     RECT bar;
     GetClientRect(taskbar, &bar);
@@ -498,8 +559,8 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
     if (W <= 0 || H <= 0) return;
     Canvas cv(W, H);
 
-    // Nearly transparent background so the whole strip receives mouse input,
-    // plus a rounded hover highlight like the system tray icons have.
+    // 帯全体でマウス入力を受け取れるよう、ほぼ透明な背景を描く。
+    // さらに、システムのトレイアイコンと同じような角丸のホバー時の強調表示も描く。
     for (auto& p : cv.px) p = 0x01000000;
     auto roundRect = [&](int inset, int r, Rgb c, int a) {
         for (int y = inset; y < H - inset; y++)
@@ -509,8 +570,8 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
                 if (dx * dx + dy * dy <= r * r) cv.Blend(x, y, c, a);
             }
     };
-    // Optional plate in the taskbar's own colours: keeps the text readable when a taskbar theme
-    // (e.g. Windhawk's Taskbar Styler) makes the bar transparent over the wallpaper.
+    // タスクバー自身の色で描く背景（オプション）: タスクバーのテーマ（Windhawk の Taskbar Styler など）でバーが
+    // 壁紙の上で透明になっても、文字が読めるようにするため。
     Rgb barColor = g_light ? Rgb{ 243, 243, 243 } : Rgb{ 32, 32, 32 };
     if (g_background) roundRect(Px(4), Px(6), barColor, 240);
     if (hover) roundRect(Px(4), Px(4), g_light ? Rgb{ 0, 0, 0 } : Rgb{ 255, 255, 255 }, g_light ? 20 : 26);
@@ -521,13 +582,13 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
     for (size_t i = 0; i < pieces.size(); i++) {
         const Piece& p = pieces[i];
         if (p.anchor < 0) {
-            bool fixed = p.px != INT_MIN;  // stacked / vertical layout: Layout() placed it
+            bool fixed = p.px != INT_MIN;  // 積み重ね / 縦のレイアウト: Layout() が配置済み
             xs[i] = fixed ? p.px : x;
             ys[i] = fixed ? p.py : (H - p.m.h) / 2;
             if (p.haloR) cv.Draw(p.halo, xs[i] - p.haloR, ys[i] - p.haloR, p.color, p.haloAlpha * p.alpha / 255);
             if (p.barPct >= 0) {
-                // The bar spans the text's width, like Synapse's battery bar; in the row layout text and bar
-                // are centred together.
+                // バーは Synapse のバッテリーバーのように文字の幅に合わせる。1 行のレイアウトでは文字とバーを
+                // まとめて中央に置く。
                 int bh = std::max(2, Px(2)), gap = Px(3);
                 if (!fixed) ys[i] = (H - (p.m.h + gap + bh)) / 2;
                 int by = ys[i] + p.m.h + gap;
@@ -537,7 +598,7 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
                         cv.Blend(xs[i] + xx, yy, xx < fill ? p.barColor : track, xx < fill ? p.alpha : 45 * p.alpha / 255);
             }
             if (!fixed) x += p.m.w + p.gapAfter;
-        } else {  // caption: one-pixel outline in the taskbar's colour so it reads over the icon's lines
+        } else {  // キャプション: アイコンの線の上でも読めるよう、タスクバーの色で 1 ピクセルの縁取りを付ける
             xs[i] = xs[p.anchor] + p.bx;
             ys[i] = ys[p.anchor] + p.by;
             for (int oy = -1; oy <= 1; oy++)
@@ -569,7 +630,7 @@ void PaintStrip(HWND wnd, HWND taskbar, bool hover, SIZE& size) {
 void Paint() {
     if (!g_wnd) return;
     PaintStrip(g_wnd, g_taskbar, g_hover, g_size);
-    g_lastW = -1;  // force a re-position with the new size
+    g_lastW = -1;  // 新しいサイズで配置し直させる
 }
 
 void PaintMirror(Mirror& m) {
@@ -577,7 +638,7 @@ void PaintMirror(Mirror& m) {
     m.dpi = Dpi();
     PaintStrip(m.wnd, m.bar, m.hover, m.size);
     g_dpiBar = nullptr;
-    m.lastLeft = INT_MIN;  // force a re-position with the new size
+    m.lastLeft = INT_MIN;  // 新しいサイズで配置し直させる
 }
 
 void HideMirror(Mirror& m) {
@@ -585,8 +646,8 @@ void HideMirror(Mirror& m) {
     m.lastLeft = INT_MIN;
 }
 
-// Places a mirror left of its taskbar's clock, or hides it when that spot is unknown or taken by task
-// buttons: never guess and cover something.
+// コピーをそのタスクバーの時計の左に置く。その位置がわからない、またはタスクボタンで埋まっているときは隠す:
+// 推測で置いて何かを覆ってしまうことは決してしない。
 void PositionMirror(Mirror& m) {
     RECT bar{};
     if (!GetWindowRect(m.bar, &bar) || (GetWindowLongW(m.bar, GWL_EXSTYLE) & WS_EX_LAYOUTRTL)) { HideMirror(m); return; }
@@ -594,7 +655,7 @@ void PositionMirror(Mirror& m) {
     if (Dpi() != m.dpi || m.size.cy != bar.bottom - bar.top) PaintMirror(m), g_dpiBar = m.bar;
     int right = 0, minLeft = bar.left;
     bool known = false;
-    if (!IsXamlTaskbar(m.bar)) {  // Windows 10: the clock is a real child window (absent when it is turned off)
+    if (!IsXamlTaskbar(m.bar)) {  // Windows 10: 時計は本物の子ウィンドウ（オフにされていればない）
         HWND clock = FindWindowExW(m.bar, nullptr, L"ClockButton", nullptr);
         RECT cr{};
         right = clock && IsWindowVisible(clock) && GetWindowRect(clock, &cr) ? cr.left : bar.right - Px(8);
@@ -650,7 +711,7 @@ void SetMeasureMirrors(bool on) {
     bool changed = g_wbMirrors != on;
     g_wbMirrors = on;
     ReleaseSRWLockExclusive(&g_wbLock);
-    if (changed && on && g_wbWake) SetEvent(g_wbWake);  // measure the new taskbar now, not in 5 s
+    if (changed && on && g_wbWake) SetEvent(g_wbWake);  // 5 秒後ではなく、今すぐ新しいタスクバーを測る
 }
 
 std::vector<HWND> SecondaryTaskbars() {
@@ -658,15 +719,15 @@ std::vector<HWND> SecondaryTaskbars() {
     for (HWND t = FindWindowExW(nullptr, nullptr, L"Shell_SecondaryTrayWnd", nullptr); t;
          t = FindWindowExW(nullptr, t, L"Shell_SecondaryTrayWnd", nullptr)) {
         RECT r{};
-        if (IsWindowVisible(t) && GetWindowRect(t, &r) && r.right - r.left > r.bottom - r.top) out.push_back(t);  // horizontal only
+        if (IsWindowVisible(t) && GetWindowRect(t, &r) && r.right - r.left > r.bottom - r.top) out.push_back(t);  // 横向きのみ
     }
     return out;
 }
 
-// Keeps one mirror per secondary taskbar: adds them for new monitors, removes them for gone ones.
-// Called from Reposition() about once a second; with one monitor it is a single FindWindowEx call.
-// A monitor's lasting identity: its device interface name, which survives reboots, Explorer restarts and
-// Windows renumbering the displays (falls back to "\\.\DISPLAYn").
+// サブタスクバーごとに 1 つずつコピーを保つ: 新しいモニターには追加し、なくなったモニターの分は削除する。
+// Reposition() から 1 秒に 1 回くらい呼ばれる。モニターが 1 台なら FindWindowEx を 1 回呼ぶだけ。
+// モニターの変わらない識別子: デバイスインターフェース名。再起動、エクスプローラーの再起動、Windows による
+// ディスプレイ番号の振り直しがあっても変わらない（取れなければ "\\.\DISPLAYn" を使う）。
 std::wstring MonitorId(HWND bar) {
     MONITORINFOEXW mi{};
     mi.cbSize = sizeof(mi);
@@ -678,7 +739,7 @@ std::wstring MonitorId(HWND bar) {
     return mi.szDevice;
 }
 
-// "Display 3 (right)": the number Windows gives the display and where it sits next to the main one.
+// "Display 3 (right)": Windows がディスプレイに付けた番号と、メインのディスプレイから見た位置。
 std::wstring MonitorLabel(HWND bar) {
     MONITORINFOEXW mi{}, pm{};
     mi.cbSize = pm.cbSize = sizeof(MONITORINFOEXW);
@@ -696,19 +757,19 @@ std::wstring MonitorLabel(HWND bar) {
     return label;
 }
 
-// Hides or shows the strip on the main taskbar (it keeps running, just out of sight).
+// メインのタスクバーの帯を隠す / 表示する（動作は続けたまま、見えなくするだけ）。
 void SetPrimaryHidden(bool hide) {
     if (hide == g_primaryHidden || !g_wnd) return;
     g_primaryHidden = hide;
     if (hide) {
         ShowWindow(g_wnd, SW_HIDE);
-        if (g_rebar && IsWindow(g_rebar)) {  // Windows 10: give the task buttons their full width back
+        if (g_rebar && IsWindow(g_rebar)) {  // Windows 10: タスクボタンの幅を元に戻す
             RECT r;
             GetClientRect(g_taskbar, &r);
             PostMessageW(g_taskbar, WM_SIZE, SIZE_RESTORED, MAKELPARAM(r.right, r.bottom));
         }
     }
-    g_lastW = -1;  // re-place (and show) on the next pass
+    g_lastW = -1;  // 次の処理で配置し直す（そして表示する）
 }
 
 void SyncMirrors() {
@@ -753,7 +814,7 @@ void PaintAll() {
     for (auto& m : g_mirrors) PaintMirror(m);
 }
 
-// Hover highlight for the strip under the mouse: the primary one or a mirror.
+// マウスの下にある帯（メインのもの、またはコピー）のホバー時の強調表示。
 void SetHover(HWND h, bool on) {
     if (h == g_wnd) {
         if (g_hover == on) return;
@@ -801,9 +862,9 @@ bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
     if (!g_taskbar || !FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr)) { g_taskbar = nullptr; return false; }
     RECT tb;
     GetWindowRect(g_taskbar, &tb);
-    g_vertical = tb.bottom - tb.top > tb.right - tb.left;  // left / right taskbar: devices stacked in a column
-    // Windows 11's taskbar is a XAML island; on Windows 10 the task buttons live in ReBarWindow32
-    // and have to be narrowed so they never slide under the widget.
+    g_vertical = tb.bottom - tb.top > tb.right - tb.left;  // 左右のタスクバー: デバイスを縦 1 列に積む
+    // Windows 11 のタスクバーは XAML Island。Windows 10 ではタスクボタンが ReBarWindow32 の中にあり、
+    // ウィジェットの下に入り込まないよう幅を狭める必要がある。
     g_rebar = FindWindowExW(g_taskbar, nullptr, L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr)
                   ? nullptr
                   : FindWindowExW(g_taskbar, nullptr, L"ReBarWindow32", nullptr);
@@ -844,13 +905,13 @@ bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme) {
     Paint();
     g_lastW = -1;
     Reposition();
-    if (!g_primaryHidden) ShowWindow(g_wnd, SW_SHOWNOACTIVATE);  // hidden when only another monitor is chosen
+    if (!g_primaryHidden) ShowWindow(g_wnd, SW_SHOWNOACTIVATE);  // ほかのモニターだけが選ばれているときは隠す
     return true;
 }
 
 void Destroy() {
     if (g_rebar && IsWindow(g_rebar) && g_taskbar && IsWindow(g_taskbar)) {
-        // Let Explorer lay the task buttons out again over the full width.
+        // エクスプローラーに、タスクボタンを全幅で並べ直させる。
         RECT r;
         GetClientRect(g_taskbar, &r);
         PostMessageW(g_taskbar, WM_SIZE, SIZE_RESTORED, MAKELPARAM(r.right, r.bottom));
@@ -859,7 +920,7 @@ void Destroy() {
     for (auto& m : g_mirrors) DestroyMirror(m);
     g_mirrors.clear();
     SetMeasureMirrors(false);
-    g_primaryHidden = false;  // the next Create() decides again
+    g_primaryHidden = false;  // 次の Create() でまた判断する
     if (g_wbWake) WatchWidgetsButton(nullptr);
     if (g_tip) { DestroyWindow(g_tip); g_tip = nullptr; }
     if (g_wnd) { DestroyWindow(g_wnd); g_wnd = nullptr; }
@@ -906,7 +967,7 @@ void SetStacked(bool on) {
 
 void SetMonitorChoice(const std::wstring& choice) {
     g_choice = choice.empty() ? L"all" : choice;
-    SyncMirrors();  // adds, removes or hides strips right away
+    SyncMirrors();  // 帯の追加・削除・非表示をすぐに行う
     if (g_wnd) Reposition();
 }
 
@@ -920,22 +981,21 @@ std::vector<MonitorOption> OtherMonitors() {
 bool Reposition() {
     if (!Alive()) return false;
     SyncMirrors();
-    if (g_primaryHidden) return true;  // only another monitor's taskbar shows the strip
+    if (g_primaryHidden) return true;  // ほかのモニターのタスクバーだけに帯を表示する
     if (Dpi() != g_lastDpi) { g_lastDpi = Dpi(); Paint(); }
     HWND tray = FindWindowExW(g_taskbar, nullptr, L"TrayNotifyWnd", nullptr);
     if (!tray) return true;
     RECT tr, bar;
     GetWindowRect(tray, &tr);
     GetWindowRect(g_taskbar, &bar);
-    // The taskbar can be moved between a horizontal and a vertical edge while the app runs.
+    // アプリの実行中に、タスクバーが横の辺と縦の辺の間で移動されることがある。
     bool vertical = bar.bottom - bar.top > bar.right - bar.left;
     if (vertical != g_vertical) {
         g_vertical = vertical;
         Paint();
     }
     if (g_vertical) {
-        // Left or right taskbar (PR #321): the column sits just above the notification area, centred in
-        // the bar's width.
+        // 左右のタスクバー（PR #321）: 列は通知領域のすぐ上に、バーの幅の中央に置く。
         RECT client{};
         GetClientRect(g_taskbar, &client);
         POINT anchor{ bar.left, tr.top };
@@ -947,7 +1007,7 @@ bool Reposition() {
             top -= Px((int)offset);
         top = std::clamp(top, 0, (int)std::max<LONG>(0, client.bottom - g_size.cy));
         int left = (int)std::max<LONG>(0, (client.right - g_size.cx) / 2);
-        // Windows 10: shorten the task-button area when it would reach behind the column.
+        // Windows 10: タスクボタンの領域が列の後ろまで届きそうなら短くする。
         if (g_rebar && IsWindow(g_rebar)) {
             RECT rr{};
             GetWindowRect(g_rebar, &rr);
@@ -966,15 +1026,14 @@ bool Reposition() {
         SetWindowPos(g_wnd, HWND_TOP, left, top, g_size.cx, g_size.cy, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         return true;
     }
-    // Right-to-left Windows (Hebrew, Arabic) mirrors the taskbar: client x runs from the screen's right
-    // edge, so a window's client-space left edge is its screen-space right edge.
+    // 右から左に書く Windows（ヘブライ語、アラビア語）ではタスクバーが左右反転する: クライアント座標の x は画面の
+    // 右端から始まるので、ウィンドウのクライアント座標での左端は、スクリーン座標での右端になる。
     bool rtl = GetWindowLongW(g_taskbar, GWL_EXSTYLE) & WS_EX_LAYOUTRTL;
-    int edge = rtl ? tr.right : tr.left;  // screen x we sit next to
-    // Windows 10: News and Interests / Weather sits immediately left of the tray. The window that hosts it
-    // depends on the build: ShellFeedsTaskbarViewWindow on some, DynamicContent2 on others (e.g. 19045,
-    // where the search highlights button is DynamicContent1). Both are direct children of the taskbar and
-    // only a visible one counts. Its rectangle is read on every pass because the weather text changes its
-    // width, so the widget follows it.
+    int edge = rtl ? tr.right : tr.left;  // 隣に並ぶ基準のスクリーン座標の x
+    // Windows 10: ニュースと関心事項 / 天気は通知領域のすぐ左にある。それを載せるウィンドウはビルドによって違い、
+    // ShellFeedsTaskbarViewWindow のものと DynamicContent2 のもの（例: 19045。検索のハイライトのボタンは
+    // DynamicContent1）がある。どちらもタスクバーの直接の子で、表示されているものだけを対象にする。天気の文字で
+    // 幅が変わるため毎回矩形を読み、ウィジェットがそれに追従するようにしている。
     if (!rtl)
         for (const wchar_t* cls : { L"ShellFeedsTaskbarViewWindow", L"DynamicContent2" }) {
             HWND feeds = FindWindowExW(g_taskbar, nullptr, cls, nullptr);
@@ -983,7 +1042,7 @@ bool Reposition() {
             GetWindowRect(feeds, &fr);
             if (fr.left < edge && fr.right > fr.left) edge = fr.left;
         }
-    // Step past the Widgets button when it sits where we would go.
+    // ウィジェットボタンが置きたい位置にあるときは、それを避けて隣に置く。
     RECT wb = WidgetsButtonRect();
     if (wb.right > wb.left && wb.top < bar.bottom && wb.bottom > bar.top &&
         (rtl ? wb.left < edge + g_size.cx + Px(2) && wb.right > edge : wb.right > edge - g_size.cx - Px(2) && wb.left < edge))
@@ -993,14 +1052,14 @@ bool Reposition() {
     int left = p.x - g_size.cx - Px(2);
 
 
-    // Optional user override in DPI-independent pixels (e.g. for custom padding).
+    // ユーザーによる任意の上書き。DPI に依存しないピクセル単位（独自の余白を付けたいときなど）。
     DWORD customOffset = 0, sz = sizeof(customOffset);
     if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\WirelessBattery", L"TaskbarOffset",
                      RRF_RT_REG_DWORD, nullptr, &customOffset, &sz) == ERROR_SUCCESS) {
         left -= Px((int)customOffset);
     }
 
-    // Windows 10: Explorer re-expands the task buttons on its own layout passes; narrow them again.
+    // Windows 10: エクスプローラーは自分のレイアウト処理でタスクボタンを広げ直すので、もう一度狭める。
     if (g_rebar && IsWindow(g_rebar)) {
         RECT rr;
         GetWindowRect(g_rebar, &rr);
@@ -1010,7 +1069,7 @@ bool Reposition() {
             MoveWindow(g_rebar, tl.x, tl.y, left - tl.x, rr.bottom - rr.top, TRUE);
     }
 
-    // Keep us above the taskbar's own content (our sibling windows).
+    // タスクバー自身の中身（兄弟ウィンドウ）より手前に表示し続ける。
     bool covered = GetWindow(g_wnd, GW_HWNDPREV) != nullptr;
     if (!covered && EqualRect(&tr, &g_lastTray) && EqualRect(&bar, &g_lastBar) && EqualRect(&wb, &g_lastWidgets) &&
         g_lastW == g_size.cx && g_lastLeft == left)

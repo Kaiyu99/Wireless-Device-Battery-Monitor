@@ -7,7 +7,7 @@
 
 namespace {
 
-// Words that say nothing about which device it is: makers and generic product words (lower case).
+// どのデバイスかを区別する手がかりにならない単語: メーカー名や一般的な製品名の単語（小文字）。
 const wchar_t* const kSkip[] = {
     L"logitech", L"logi", L"razer", L"steelseries", L"corsair", L"hyperx", L"glorious", L"keychron", L"microsoft",
     L"sony", L"asus", L"lamzu", L"pulsar", L"zowie", L"rapoo", L"wireless", L"gaming", L"mouse", L"headset",
@@ -85,7 +85,7 @@ std::vector<std::wstring> ShortLabels(const std::vector<LabelInput>& items, size
             for (const auto& w : words) cand.push_back(Clip(FirstWords(w, k), maxChars));
             if (AllDistinct(cand)) pick = cand;
         }
-        if (pick.empty()) {  // same words all the way ("Xbox controller 1" / "Xbox controller 2")
+        if (pick.empty()) {  // 最後まで同じ単語（"Xbox controller 1" / "Xbox controller 2"）
             std::vector<std::wstring> nums;
             for (const auto& w : words) nums.push_back(!w.empty() && IsNumber(w.back()) ? Clip(w.back(), maxChars) : L"");
             if (AllDistinct(nums)) {
