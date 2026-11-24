@@ -25,6 +25,7 @@ const BrandStyle kBrands[] = {
     { Accent::CoolerMaster, L"Cooler Master",{ 157, 107, 255 }, { 106,  43, 217 } },  // 紫
     { Accent::Steam,        L"Steam",        {  26, 159, 255 }, {  11, 111, 191 } },  // #1A9FFF
     { Accent::Vspo,         L"VSPO! GEAR",   { 255, 204,   0 }, { 140, 104,   0 } },  // 黄色 #FFCC00（明るいタスクバーでは #8C6800、コントラスト 4.6:1）
+    { Accent::Pulsar,       L"Pulsar",       { 235, 235, 240 }, {  64,  64,  64 } },  // 公式色はなく、ロゴの白黒に合わせる（Apple のシルバーより白く、明るいタスクバーでは黒寄り）
 };
 
 std::wstring Lower(std::wstring s) {
@@ -64,6 +65,7 @@ const KeyRule kKeys[] = {
     { L"steam:", Accent::Steam },
     // ベンダー ID 19F5 は Luminkey のキーボード全般と共有なので、ドライバーのキーだけで判定する。
     { L"vspo:", Accent::Vspo },
+    { L"pulsar:", Accent::Pulsar },
 };
 
 // これらのブランドのうち 1 社だけが使うベンダー ID。共有されている ID は名前での判定に任せる:
@@ -83,6 +85,7 @@ const VidRule kVids[] = {
     { 0x0ECB, Accent::Jbl },
     { 0x2516, Accent::CoolerMaster },
     { 0x28DE, Accent::Steam },
+    { 0x3710, Accent::Pulsar },     // Kysona ドライバー経由の Pulsar（例: 8K ドングル 5502）もこれで判定する
 };
 
 enum class How { Contains, Word, Prefix, Exact };
@@ -113,6 +116,7 @@ const NameRule kNames[] = {
     { L"jbl", How::Word, Accent::Jbl },
     { L"cooler master", How::Contains, Accent::CoolerMaster }, { L"coolermaster", How::Contains, Accent::CoolerMaster },
     { L"steam controller", How::Contains, Accent::Steam },
+    { L"pulsar", How::Word, Accent::Pulsar },
 };
 
 bool Matches(const std::wstring& n, const NameRule& r) {
