@@ -43,6 +43,8 @@ int main() {
     Expect(L"pulsar:5402", L"Pulsar X2 V3", 0x3710, K::Mouse, Accent::Pulsar);
     Expect(L"kysona:3710:5502", L"Pulsar LED 8K Dongle", 0x3710, K::Mouse, Accent::Pulsar);
     Expect(L"bt:{x}", L"Pulsar X3", 0, K::Mouse, Accent::Pulsar);
+    Expect(L"finalmouse:0100", L"Finalmouse UltralightX", 0x361D, K::Mouse, Accent::Finalmouse);
+    Expect(L"hid:361D:0300", L"Starlight X", 0x361D, K::Mouse, Accent::Finalmouse);
     // Vendor ids (HeadsetControl and plain Bluetooth / HID devices).
     Expect(L"hsc:1038:12e0", L"Arctis Nova 7", 0x1038, K::Headset, Accent::SteelSeries);
     Expect(L"hsc:1b1c:0a6b", L"Void Wireless", 0x1B1C, K::Headset, Accent::Corsair);
