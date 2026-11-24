@@ -39,6 +39,7 @@ int main() {
     Expect(L"jbl:x", L"Quantum 910", 0, K::Headset, Accent::Jbl);
     Expect(L"coolermaster:x", L"MM712", 0, K::Mouse, Accent::CoolerMaster);
     Expect(L"steam:x", L"Controller", 0, K::Gamepad, Accent::Steam);
+    Expect(L"vspo:19F5", L"Kaminari Qpi", 0x19F5, K::Keyboard, Accent::Vspo);
     // Vendor ids (HeadsetControl and plain Bluetooth / HID devices).
     Expect(L"hsc:1038:12e0", L"Arctis Nova 7", 0x1038, K::Headset, Accent::SteelSeries);
     Expect(L"hsc:1b1c:0a6b", L"Void Wireless", 0x1B1C, K::Headset, Accent::Corsair);

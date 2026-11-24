@@ -24,6 +24,7 @@ const BrandStyle kBrands[] = {
     { Accent::Jbl,          L"JBL",          { 255,  61,   0 }, { 204,  52,   0 } },  // #FF3D00
     { Accent::CoolerMaster, L"Cooler Master",{ 157, 107, 255 }, { 106,  43, 217 } },  // 紫
     { Accent::Steam,        L"Steam",        {  26, 159, 255 }, {  11, 111, 191 } },  // #1A9FFF
+    { Accent::Vspo,         L"VSPO! GEAR",   { 255, 204,   0 }, { 140, 104,   0 } },  // 黄色 #FFCC00（明るいタスクバーでは #8C6800、コントラスト 4.6:1）
 };
 
 std::wstring Lower(std::wstring s) {
@@ -61,6 +62,8 @@ const KeyRule kKeys[] = {
     { L"jbl:", Accent::Jbl },
     { L"coolermaster:", Accent::CoolerMaster },
     { L"steam:", Accent::Steam },
+    // ベンダー ID 19F5 は Luminkey のキーボード全般と共有なので、ドライバーのキーだけで判定する。
+    { L"vspo:", Accent::Vspo },
 };
 
 // これらのブランドのうち 1 社だけが使うベンダー ID。共有されている ID は名前での判定に任せる:
